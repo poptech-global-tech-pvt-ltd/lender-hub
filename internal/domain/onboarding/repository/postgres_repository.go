@@ -73,7 +73,7 @@ func (r *postgresOnboardingRepository) Update(ctx context.Context, ob *entity.On
 
 // toEntity converts GORM model to domain entity
 func toEntity(model *infra.LenderOnboarding) *entity.Onboarding {
-	return &entity.Onboarding{
+	onboarding := &entity.Onboarding{
 		ID:                     model.ID,
 		OnboardingID:           model.OnboardingID,
 		ProviderOnboardingID:   model.ProviderOnboardingID,
@@ -83,11 +83,9 @@ func toEntity(model *infra.LenderOnboarding) *entity.Onboarding {
 		Mobile:                 model.Mobile,
 		Source:                 model.Source,
 		Channel:                model.Channel,
-		Status:                 model.Status,
-		LastStep:               model.LastStep,
+		Status:                 entity.OnboardingStatus(model.Status),
 		RejectionReasonCode:    model.RejectionReasonCode,
 		RejectionReasonMessage: model.RejectionReasonMessage,
-		COFEligible:            model.COFEligible,
 		RedirectURL:            model.RedirectURL,
 		IsRetryable:            model.IsRetryable,
 		RetryCount:             model.RetryCount,
@@ -98,10 +96,31 @@ func toEntity(model *infra.LenderOnboarding) *entity.Onboarding {
 		CreatedAt:              model.CreatedAt,
 		UpdatedAt:              model.UpdatedAt,
 	}
+
+	// Map LastStep
+	if model.LastStep != nil {
+		step := entity.OnboardingStep(*model.LastStep)
+		onboarding.LastStep = &step
+	}
+
+	// Map COFEligible
+	if model.COFEligible != nil {
+		onboarding.COFEligible = *model.COFEligible
+	}
+
+	return onboarding
 }
 
 // toModel converts domain entity to GORM model
 func toModel(e *entity.Onboarding) *infra.LenderOnboarding {
+	var lastStep *string
+	if e.LastStep != nil {
+		stepStr := string(*e.LastStep)
+		lastStep = &stepStr
+	}
+
+	cofEligible := e.COFEligible
+
 	return &infra.LenderOnboarding{
 		ID:                     e.ID,
 		OnboardingID:           e.OnboardingID,
@@ -112,11 +131,11 @@ func toModel(e *entity.Onboarding) *infra.LenderOnboarding {
 		Mobile:                 e.Mobile,
 		Source:                 e.Source,
 		Channel:                e.Channel,
-		Status:                 e.Status,
-		LastStep:               e.LastStep,
+		Status:                 string(e.Status),
+		LastStep:               lastStep,
 		RejectionReasonCode:    e.RejectionReasonCode,
 		RejectionReasonMessage: e.RejectionReasonMessage,
-		COFEligible:            e.COFEligible,
+		COFEligible:            &cofEligible,
 		RedirectURL:            e.RedirectURL,
 		IsRetryable:            e.IsRetryable,
 		RetryCount:             e.RetryCount,

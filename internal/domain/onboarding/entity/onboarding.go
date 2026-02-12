@@ -3,7 +3,6 @@ package entity
 import "time"
 
 // Onboarding represents an onboarding attempt
-
 type Onboarding struct {
 	ID                     int64
 	OnboardingID           string
@@ -14,11 +13,11 @@ type Onboarding struct {
 	Mobile                 string
 	Source                 string
 	Channel                *string
-	Status                 string
-	LastStep               *string
+	Status                 OnboardingStatus
+	LastStep               *OnboardingStep
 	RejectionReasonCode    *string
 	RejectionReasonMessage *string
-	COFEligible            *bool
+	COFEligible            bool
 	RedirectURL            *string
 	IsRetryable            bool
 	RetryCount             int

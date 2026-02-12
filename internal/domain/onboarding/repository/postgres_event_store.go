@@ -48,6 +48,12 @@ func (s *postgresOnboardingEventStore) ListByOnboardingID(ctx context.Context, o
 
 // toEventEntity converts GORM model to domain entity
 func toEventEntity(model *infra.LenderOnboardingEvent) *entity.OnboardingEvent {
+	var step *entity.OnboardingStep
+	if model.Step != nil {
+		stepVal := entity.OnboardingStep(*model.Step)
+		step = &stepVal
+	}
+
 	return &entity.OnboardingEvent{
 		ID:           model.ID,
 		Provider:     model.Provider,
@@ -57,7 +63,7 @@ func toEventEntity(model *infra.LenderOnboardingEvent) *entity.OnboardingEvent {
 		OnboardingID: model.OnboardingID,
 		EventType:    model.EventType,
 		Status:       model.Status,
-		Step:         model.Step,
+		Step:         step,
 		ErrorCode:    model.ErrorCode,
 		Message:      model.Message,
 		EventTime:    model.EventTime,
@@ -68,6 +74,12 @@ func toEventEntity(model *infra.LenderOnboardingEvent) *entity.OnboardingEvent {
 
 // toEventModel converts domain entity to GORM model
 func toEventModel(e *entity.OnboardingEvent) *infra.LenderOnboardingEvent {
+	var step *string
+	if e.Step != nil {
+		stepStr := string(*e.Step)
+		step = &stepStr
+	}
+
 	return &infra.LenderOnboardingEvent{
 		ID:           e.ID,
 		Provider:     e.Provider,
@@ -77,7 +89,7 @@ func toEventModel(e *entity.OnboardingEvent) *infra.LenderOnboardingEvent {
 		OnboardingID: e.OnboardingID,
 		EventType:    e.EventType,
 		Status:       e.Status,
-		Step:         e.Step,
+		Step:         step,
 		ErrorCode:    e.ErrorCode,
 		Message:      e.Message,
 		EventTime:    e.EventTime,

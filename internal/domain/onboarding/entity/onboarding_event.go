@@ -12,7 +12,7 @@ type OnboardingEvent struct {
 	OnboardingID string
 	EventType    string
 	Status       string
-	Step         *string
+	Step         *OnboardingStep
 	ErrorCode    *string
 	Message      *string
 	EventTime    time.Time
