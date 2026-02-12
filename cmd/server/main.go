@@ -14,6 +14,7 @@ import (
 
 	"lending-hub-service/config"
 	pg "lending-hub-service/internal/infrastructure/postgres"
+	"lending-hub-service/internal/domain/profile"
 	"lending-hub-service/internal/shared/middleware"
 )
 
@@ -108,16 +109,21 @@ func registerRoutes(router *gin.Engine, db *gorm.DB) {
 	// Readiness check endpoint
 	router.GET("/ready", readyHandler(db))
 
-	// API version group (future module routes will be registered here)
+	// API version group
 	v1 := router.Group("/v1")
 	{
-		// Placeholder for future routes
+		// Placeholder ping endpoint
 		v1.GET("/ping", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"message": "pong",
 				"service": "lending-hub-service",
 			})
 		})
+
+		// Profile module routes
+		profileModule := profile.NewModuleWithStubs(db)
+		payin3Group := v1.Group("/payin3")
+		profileModule.RegisterRoutes(payin3Group)
 	}
 }
 

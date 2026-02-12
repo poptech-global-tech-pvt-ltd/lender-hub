@@ -2,24 +2,27 @@ package entity
 
 import "time"
 
-// UserProfile represents a user's profile with a lender
+// UserProfile is the aggregate root for a user's Pay-in-3 profile
 type UserProfile struct {
-	ID                 int64
-	UserID             string
-	Lender             string
-	CurrentStatus      string
-	OnboardingDone     *bool
-	NTBStatus          *bool
-	CreditLimit        *float64
-	AvailableLimit     *float64
-	CreditLineActive   bool
-	CreditLineSummary  []byte
-	IsBlocked          *bool
-	BlockReason        *string
-	BlockSource        *string
-	NextEligibleAt     *time.Time
-	LastOnboardingID   *int64
-	LastLimitRefreshAt *time.Time
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	UserID            string
+	Lender            string
+	Status            ProfileStatus
+	OnboardingDone    bool
+	CreditLine        CreditLine
+	Block             BlockInfo
+	CreditLineSummary []byte     // JSONB: cached eligibility data
+	LastOnboardingID  *int64
+	LastLimitRefresh  *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+// CanTransitionTo delegates to ProfileStatus
+func (p *UserProfile) CanTransitionTo(next ProfileStatus) bool {
+	return p.Status.CanTransitionTo(next)
+}
+
+// IsEligible returns true if user can currently transact
+func (p *UserProfile) IsEligible() bool {
+	return p.Status == ProfileActive && !p.Block.IsBlocked && p.CreditLine.AvailableLimit > 0
 }

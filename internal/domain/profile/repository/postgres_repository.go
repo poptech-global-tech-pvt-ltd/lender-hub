@@ -76,47 +76,74 @@ func (r *postgresProfileRepository) Upsert(ctx context.Context, profile *entity.
 
 // toEntity converts GORM model to domain entity
 func toEntity(model *infra.LenderUser) *entity.UserProfile {
-	return &entity.UserProfile{
-		ID:                 model.ID,
-		UserID:             model.UserID,
-		Lender:             model.Lender,
-		CurrentStatus:      model.CurrentStatus,
-		OnboardingDone:     model.OnboardingDone,
-		NTBStatus:          model.NTBStatus,
-		CreditLimit:        model.CreditLimit,
-		AvailableLimit:     model.AvailableLimit,
-		CreditLineActive:   model.CreditLineActive,
-		CreditLineSummary:  model.CreditLineSummary,
-		IsBlocked:          model.IsBlocked,
-		BlockReason:        model.BlockReason,
-		BlockSource:        model.BlockSource,
-		NextEligibleAt:     model.NextEligibleAt,
-		LastOnboardingID:   model.LastOnboardingID,
-		LastLimitRefreshAt: model.LastLimitRefreshAt,
-		CreatedAt:          model.CreatedAt,
-		UpdatedAt:          model.UpdatedAt,
+	profile := &entity.UserProfile{
+		UserID:            model.UserID,
+		Lender:            model.Lender,
+		Status:            entity.ProfileStatus(model.CurrentStatus),
+		OnboardingDone:    model.OnboardingDone != nil && *model.OnboardingDone,
+		CreditLineSummary: model.CreditLineSummary,
+		LastOnboardingID:  model.LastOnboardingID,
+		LastLimitRefresh:  model.LastLimitRefreshAt,
+		CreatedAt:         model.CreatedAt,
+		UpdatedAt:         model.UpdatedAt,
 	}
+
+	// Map credit line
+	if model.CreditLimit != nil {
+		profile.CreditLine.Limit = *model.CreditLimit
+	}
+	if model.AvailableLimit != nil {
+		profile.CreditLine.AvailableLimit = *model.AvailableLimit
+	}
+	profile.CreditLine.Currency = "INR"
+
+	// Map block info
+	if model.IsBlocked != nil {
+		profile.Block.IsBlocked = *model.IsBlocked
+	}
+	if model.BlockReason != nil {
+		profile.Block.Reason = *model.BlockReason
+	}
+	if model.BlockSource != nil {
+		profile.Block.Source = *model.BlockSource
+	}
+	profile.Block.NextEligibleAt = model.NextEligibleAt
+
+	return profile
 }
 
 // toModel converts domain entity to GORM model
 func toModel(e *entity.UserProfile) *infra.LenderUser {
+	onboardingDone := e.OnboardingDone
+	isBlocked := e.Block.IsBlocked
+	creditLimit := e.CreditLine.Limit
+	availableLimit := e.CreditLine.AvailableLimit
+
+	var blockReason *string
+	if e.Block.Reason != "" {
+		blockReason = &e.Block.Reason
+	}
+
+	var blockSource *string
+	if e.Block.Source != "" {
+		blockSource = &e.Block.Source
+	}
+
 	return &infra.LenderUser{
-		ID:                 e.ID,
 		UserID:             e.UserID,
 		Lender:             e.Lender,
-		CurrentStatus:      e.CurrentStatus,
-		OnboardingDone:     e.OnboardingDone,
-		NTBStatus:          e.NTBStatus,
-		CreditLimit:        e.CreditLimit,
-		AvailableLimit:     e.AvailableLimit,
-		CreditLineActive:   e.CreditLineActive,
+		CurrentStatus:      string(e.Status),
+		OnboardingDone:     &onboardingDone,
+		CreditLimit:        &creditLimit,
+		AvailableLimit:     &availableLimit,
+		CreditLineActive:   e.CreditLine.Limit > 0,
 		CreditLineSummary:  e.CreditLineSummary,
-		IsBlocked:          e.IsBlocked,
-		BlockReason:        e.BlockReason,
-		BlockSource:        e.BlockSource,
-		NextEligibleAt:     e.NextEligibleAt,
+		IsBlocked:          &isBlocked,
+		BlockReason:        blockReason,
+		BlockSource:        blockSource,
+		NextEligibleAt:     e.Block.NextEligibleAt,
 		LastOnboardingID:   e.LastOnboardingID,
-		LastLimitRefreshAt: e.LastLimitRefreshAt,
+		LastLimitRefreshAt: e.LastLimitRefresh,
 		CreatedAt:          e.CreatedAt,
 		UpdatedAt:          e.UpdatedAt,
 	}
