@@ -8,12 +8,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
 	"lending-hub-service/config"
 	pg "lending-hub-service/internal/infrastructure/postgres"
+	"lending-hub-service/internal/infrastructure/cache"
+	"lending-hub-service/internal/infrastructure/kafka"
 	"lending-hub-service/internal/adapter/lazypay"
 	lazypayConfig "lending-hub-service/internal/adapter/lazypay/config"
 	"lending-hub-service/internal/domain/onboarding"
@@ -123,6 +126,61 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 	// Readiness check endpoint
 	router.GET("/ready", readyHandler(db))
 
+	// Initialize cache (Redis or memory)
+	var profileCache profilePort.ProfileCache
+	if cfg.Redis.Addr != "" {
+		redisCfg := cache.RedisConfig{
+			Address:      cfg.Redis.Addr,
+			Password:     cfg.Redis.Password,
+			DB:           cfg.Redis.DB,
+			PoolSize:     25,
+			MinIdleConns: 5,
+			DialTimeout:  cfg.Redis.DialTimeout,
+			ReadTimeout:  cfg.Redis.ReadTimeout,
+			WriteTimeout: cfg.Redis.WriteTimeout,
+		}
+		redisCache, err := cache.NewRedisProfileCache(redisCfg)
+		if err != nil {
+			log.Printf("Failed to connect to Redis, using memory cache: %v", err)
+			profileCache = cache.NewMemoryProfileCache(60 * time.Second)
+		} else {
+			profileCache = redisCache
+			log.Println("Using Redis cache")
+		}
+	} else {
+		profileCache = cache.NewMemoryProfileCache(60 * time.Second)
+		log.Println("Using memory cache (no Redis config)")
+	}
+
+	// Initialize event publishers (Kafka or noop)
+	var profilePublisher profilePort.ProfileEventPublisher
+	var orderPublisher orderPort.OrderEventPublisher
+	if len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Enabled {
+		producerCfg := kafka.ProducerConfig{
+			Brokers:         cfg.Kafka.Brokers,
+			Async:           true,
+			CompressionType: "snappy",
+			BatchSize:       100,
+			LingerMs:        5,
+			Retries:         3,
+			RequiredAcks:    "all",
+		}
+		producer, err := kafka.NewProducer(producerCfg)
+		if err != nil {
+			log.Printf("Failed to create Kafka producer, using noop: %v", err)
+			profilePublisher = kafka.NewProfileEventPublisher(kafka.NewNoopProducer())
+			orderPublisher = kafka.NewOrderEventPublisher(kafka.NewNoopProducer())
+		} else {
+			profilePublisher = kafka.NewProfileEventPublisher(producer)
+			orderPublisher = kafka.NewOrderEventPublisher(producer)
+			log.Println("Using Kafka event publishers")
+		}
+	} else {
+		profilePublisher = kafka.NewProfileEventPublisher(kafka.NewNoopProducer())
+		orderPublisher = kafka.NewOrderEventPublisher(kafka.NewNoopProducer())
+		log.Println("Using noop event publishers (no Kafka config)")
+	}
+
 	// Initialize gateways (real or stub)
 	var (
 		profileGW    profilePort.ProfileGateway
@@ -170,7 +228,7 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		})
 
 		// Profile module routes
-		profileModule := profile.NewModule(db, profileGW, profileStub.NewStubProfileCache(), profileStub.NewStubProfileEventPublisher())
+		profileModule := profile.NewModule(db, profileGW, profileCache, profilePublisher)
 		payin3Group := v1.Group("/payin3")
 		profileModule.RegisterRoutes(payin3Group)
 
@@ -179,7 +237,7 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		onboardingModule.RegisterRoutes(payin3Group)
 
 		// Order module routes
-		orderModule := order.NewModule(db, orderGW, profileModule.Updater, orderStub.NewStubOrderEventPublisher())
+		orderModule := order.NewModule(db, orderGW, profileModule.Updater, orderPublisher)
 		orderModule.RegisterRoutes(payin3Group)
 
 		// Refund module routes

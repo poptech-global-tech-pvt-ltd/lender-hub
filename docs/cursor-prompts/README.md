@@ -14,6 +14,8 @@ Each .md file records what was built, design decisions, and verification steps.
 | 3A | [phase-3a-infra-executors.md](./phase-3a-infra-executors.md) | HTTP executors, circuit breaker, signature |
 | 3B | [phase-3b-lazypay-dtos-mappers.md](./phase-3b-lazypay-dtos-mappers.md) | Lazypay DTOs + mappers |
 | 3C | [phase-3c-lazypay-clients.md](./phase-3c-lazypay-clients.md) | Lazypay clients + adapter wiring |
+| 4A | [phase-4a-kafka-redis.md](./phase-4a-kafka-redis.md) | Kafka producer/consumer + Redis cache |
+| 4B | [phase-4b-observability.md](./phase-4b-observability.md) | Structured logging + Datadog metrics |
 
 ## How to Use
 
@@ -56,6 +58,12 @@ Phase 3B (DTOs + Mappers)
 
 Phase 3C (Clients + Wiring)
   └─ Depends on: 3A (executors, signature), 3B (DTOs, mappers), 2A-2D (gateway interfaces)
+
+Phase 4A (Kafka + Redis)
+  └─ Depends on: 2A (ProfileEventPublisher, ProfileCache interfaces), 2C (OrderEventPublisher interface)
+
+Phase 4B (Observability)
+  └─ No dependencies (foundation layer)
 ```
 
 ## Quick Start
@@ -72,4 +80,4 @@ go run cmd/server/main.go
 
 ## Next Steps
 
-After Phase 2D, proceed to **Phase 3: Lazypay Adapter** to replace stub implementations with real HTTP clients.
+After Phase 4A, proceed to **Phase 4B: Observability** for metrics, tracing, and enhanced logging.
