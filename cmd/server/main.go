@@ -14,10 +14,21 @@ import (
 
 	"lending-hub-service/config"
 	pg "lending-hub-service/internal/infrastructure/postgres"
+	"lending-hub-service/internal/adapter/lazypay"
+	lazypayConfig "lending-hub-service/internal/adapter/lazypay/config"
 	"lending-hub-service/internal/domain/onboarding"
+	onbPort "lending-hub-service/internal/domain/onboarding/port"
+	onbStub "lending-hub-service/internal/domain/onboarding/stub"
 	"lending-hub-service/internal/domain/order"
+	orderPort "lending-hub-service/internal/domain/order/port"
+	orderStub "lending-hub-service/internal/domain/order/stub"
+	orderRepo "lending-hub-service/internal/domain/order/repository"
 	"lending-hub-service/internal/domain/refund"
+	refundPort "lending-hub-service/internal/domain/refund/port"
+	refundStub "lending-hub-service/internal/domain/refund/stub"
 	"lending-hub-service/internal/domain/profile"
+	profilePort "lending-hub-service/internal/domain/profile/port"
+	profileStub "lending-hub-service/internal/domain/profile/stub"
 	"lending-hub-service/internal/shared/middleware"
 )
 
@@ -67,7 +78,7 @@ func main() {
 	)
 
 	// Register routes
-	registerRoutes(router, db)
+	registerRoutes(router, db, cfg)
 
 	// Create HTTP server
 	addr := ":" + cfg.HTTP.Port
@@ -105,12 +116,47 @@ func main() {
 }
 
 // registerRoutes sets up all HTTP routes
-func registerRoutes(router *gin.Engine, db *gorm.DB) {
+func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 	// Health check endpoint
 	router.GET("/health", healthHandler(db))
 
 	// Readiness check endpoint
 	router.GET("/ready", readyHandler(db))
+
+	// Initialize gateways (real or stub)
+	var (
+		profileGW    profilePort.ProfileGateway
+		onboardingGW onbPort.OnboardingGateway
+		orderGW      orderPort.OrderGateway
+		refundGW     refundPort.RefundGateway
+	)
+
+	// Check if Lazypay config is present
+	if cfg.Lazypay.BaseURL != "" && cfg.Lazypay.AccessKey != "" {
+		// Real Lazypay adapter
+		lpCfg := &lazypayConfig.LazypayConfig{
+			BaseURL:        cfg.Lazypay.BaseURL,
+			AccessKey:      cfg.Lazypay.AccessKey,
+			SecretKey:      cfg.Lazypay.SecretKey,
+			MerchantID:     "", // TODO: add to config if needed
+			ProfileTimeout: 10, // Default, can be overridden
+			PaymentTimeout: 5,  // Default, can be overridden
+			WebhookSecret:  "", // TODO: add to config if needed
+		}
+		lpClient := lazypay.NewAdapter(lpCfg)
+		profileGW = lpClient.ProfileGateway()
+		onboardingGW = lpClient.OnboardingGateway()
+		orderGW = lpClient.OrderGateway()
+		refundGW = lpClient.RefundGateway()
+		log.Println("Using Lazypay adapter")
+	} else {
+		// Stub gateways for local dev
+		profileGW = profileStub.NewStubProfileGateway()
+		onboardingGW = onbStub.NewStubOnboardingGateway()
+		orderGW = orderStub.NewStubOrderGateway()
+		refundGW = refundStub.NewStubRefundGateway()
+		log.Println("Using stub gateways (no Lazypay config)")
+	}
 
 	// API version group
 	v1 := router.Group("/v1")
@@ -124,20 +170,21 @@ func registerRoutes(router *gin.Engine, db *gorm.DB) {
 		})
 
 		// Profile module routes
-		profileModule := profile.NewModuleWithStubs(db)
+		profileModule := profile.NewModule(db, profileGW, profileStub.NewStubProfileCache(), profileStub.NewStubProfileEventPublisher())
 		payin3Group := v1.Group("/payin3")
 		profileModule.RegisterRoutes(payin3Group)
 
 		// Onboarding module routes
-		onboardingModule := onboarding.NewModuleWithStubs(db, profileModule.Updater)
+		onboardingModule := onboarding.NewModule(db, onboardingGW, profileModule.Updater)
 		onboardingModule.RegisterRoutes(payin3Group)
 
 		// Order module routes
-		orderModule := order.NewModuleWithStubs(db, profileModule.Updater)
+		orderModule := order.NewModule(db, orderGW, profileModule.Updater, orderStub.NewStubOrderEventPublisher())
 		orderModule.RegisterRoutes(payin3Group)
 
 		// Refund module routes
-		refundModule := refund.NewModuleWithStubs(db, profileModule.Updater)
+		orderRepo := orderRepo.NewOrderRepository(db)
+		refundModule := refund.NewModule(db, refundGW, orderRepo, profileModule.Updater)
 		refundModule.RegisterRoutes(payin3Group)
 	}
 }

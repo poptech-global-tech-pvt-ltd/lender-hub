@@ -1,0 +1,141 @@
+package client
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	onbReq "lending-hub-service/internal/domain/onboarding/dto/request"
+	onbResp "lending-hub-service/internal/domain/onboarding/dto/response"
+	"lending-hub-service/internal/adapter/lazypay/config"
+	lpConstants "lending-hub-service/internal/adapter/lazypay/constants"
+	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
+	"lending-hub-service/internal/adapter/lazypay/mapper"
+	"lending-hub-service/internal/adapter/lazypay/signature"
+	"lending-hub-service/internal/infrastructure/http/executor"
+	sharedErrors "lending-hub-service/internal/shared/errors"
+)
+
+// OnboardingClient implements OnboardingGateway for Lazypay
+type OnboardingClient struct {
+	config   *config.LazypayConfig
+	signer   *signature.SignatureService
+	executor executor.HttpExecutor
+}
+
+// NewOnboardingClient creates a new OnboardingClient
+func NewOnboardingClient(
+	cfg *config.LazypayConfig,
+	signer *signature.SignatureService,
+	exec executor.HttpExecutor,
+) *OnboardingClient {
+	return &OnboardingClient{
+		config:   cfg,
+		signer:   signer,
+		executor: exec,
+	}
+}
+
+// StartOnboarding implements OnboardingGateway.StartOnboarding
+func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.StartOnboardingRequest) (*onbResp.OnboardingResponse, error) {
+	// Map to LP request
+	lpReq := mapper.ToLPOnboardingRequest(req, c.config.AccessKey, c.config.MerchantID)
+
+	// Marshal to JSON
+	jsonBody, err := json.Marshal(lpReq)
+	if err != nil {
+		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to marshal request: "+err.Error())
+	}
+
+	// Build executor request
+	execReq := executor.Request{
+		Method: http.MethodPost,
+		URL:    c.config.BaseURL + lpConstants.PathCreateOnboarding,
+		Headers: map[string]string{
+			lpConstants.HeaderAccessKey:   c.config.AccessKey,
+			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+		},
+		Body: bytes.NewReader(jsonBody),
+	}
+
+	// Execute request
+	resp, err := c.executor.Do(ctx, execReq)
+	if err != nil {
+		return nil, fmt.Errorf("executor error: %w", err)
+	}
+
+	// Check for HTTP errors
+	if resp.StatusCode >= 400 {
+		return nil, c.handleErrorResponse(resp.Body)
+	}
+
+	// Unmarshal response
+	var lpResp lpResp.LPOnboardingResponse
+	if err := json.Unmarshal(resp.Body, &lpResp); err != nil {
+		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
+	}
+
+	// Map to canonical response
+	return mapper.FromLPOnboardingResponse(&lpResp, req.OnboardingTxnID), nil
+}
+
+// GetOnboardingStatus implements OnboardingGateway.GetOnboardingStatus
+func (c *OnboardingClient) GetOnboardingStatus(ctx context.Context, mobile string) (*onbResp.OnboardingStatusResponse, error) {
+	// Build URL with query params
+	url := fmt.Sprintf("%s%s?mobile=%s", c.config.BaseURL, lpConstants.PathOnboardingStatus, mobile)
+
+	// Build executor request
+	execReq := executor.Request{
+		Method: http.MethodGet,
+		URL:    url,
+		Headers: map[string]string{
+			lpConstants.HeaderAccessKey:   c.config.AccessKey,
+			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+		},
+		Body: nil,
+	}
+
+	// Execute request
+	resp, err := c.executor.Do(ctx, execReq)
+	if err != nil {
+		return nil, fmt.Errorf("executor error: %w", err)
+	}
+
+	// Check for HTTP errors
+	if resp.StatusCode >= 400 {
+		return nil, c.handleErrorResponse(resp.Body)
+	}
+
+	// Unmarshal response (assuming same structure as LPOnboardingResponse)
+	var lpResp lpResp.LPOnboardingResponse
+	if err := json.Unmarshal(resp.Body, &lpResp); err != nil {
+		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
+	}
+
+	// Map to canonical response
+	// Note: OnboardingStatusResponse structure may need adjustment based on actual LP response
+	return &onbResp.OnboardingStatusResponse{
+		OnboardingID: "", // Not in LP response
+		UserID:       "", // Not in LP response
+		Provider:     "LAZYPAY",
+		Status:       lpResp.Status,
+		COFEligible:  lpResp.COFEligible,
+		LastStep:     nil, // Not in LP response
+		Steps:        nil, // Not in LP response
+		UpdatedAt:    "",  // Not in LP response
+	}, nil
+}
+
+// handleErrorResponse parses error response and returns DomainError
+func (c *OnboardingClient) handleErrorResponse(body []byte) error {
+	var lpError struct {
+		ErrorCode    string `json:"errorCode"`
+		ErrorMessage string `json:"errorMessage"`
+	}
+	if err := json.Unmarshal(body, &lpError); err == nil && lpError.ErrorCode != "" {
+		return mapper.MapLPError(lpError.ErrorCode)
+	}
+	return sharedErrors.New(sharedErrors.CodeInternalError, 500, "provider error")
+}
