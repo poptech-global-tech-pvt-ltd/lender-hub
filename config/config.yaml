@@ -1,0 +1,43 @@
+env: "local"
+
+http:
+  port: "8080"
+  read_timeout: 30s
+  write_timeout: 30s
+  shutdown_timeout: 10s
+
+db:
+  host: "localhost"
+  port: 5432
+  user: "lending_hub"
+  password: "lending_hub"
+  name: "lending_hub"
+  sslmode: "disable"
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: 300s
+  conn_max_idle_time: 120s
+
+lazypay:
+  base_url: "https://sandbox.lazypay.in"
+  access_key: "CHANGE_ME"
+  secret_key: "CHANGE_ME"
+  profile_timeout: 10s
+  payment_timeout: 5s
+  enabled: false
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  dial_timeout: 5s
+  read_timeout: 3s
+  write_timeout: 3s
+
+kafka:
+  enabled: false
+  brokers:
+    - "localhost:9092"
+  profile_topic: "lending-hub.profile.events"
+  order_topic: "lending-hub.order.events"
+  refund_topic: "lending-hub.refund.events"
