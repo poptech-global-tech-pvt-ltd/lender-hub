@@ -3,6 +3,7 @@ package entity
 import "time"
 
 // Onboarding represents an onboarding attempt
+
 type Onboarding struct {
 	ID                     int64
 	OnboardingID           string
