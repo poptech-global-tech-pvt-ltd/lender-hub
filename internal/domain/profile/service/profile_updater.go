@@ -190,3 +190,22 @@ func (u *ProfileUpdater) UpdateLimit(ctx context.Context, userID, lender string,
 
 	return nil
 }
+
+// AddToLimit adds an amount to the current available limit
+func (u *ProfileUpdater) AddToLimit(ctx context.Context, userID, lender string, amount float64) error {
+	profile, err := u.repo.GetForUpdate(ctx, userID, lender)
+	if err != nil {
+		return err
+	}
+	if profile == nil {
+		return sharedErrors.New(sharedErrors.CodeUserNotFound, 404, "profile not found")
+	}
+
+	newAvailable := profile.CreditLine.AvailableLimit + amount
+	// Ensure it doesn't exceed the credit limit
+	if newAvailable > profile.CreditLine.Limit {
+		newAvailable = profile.CreditLine.Limit
+	}
+
+	return u.UpdateLimit(ctx, userID, lender, newAvailable)
+}

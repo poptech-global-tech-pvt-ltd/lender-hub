@@ -74,7 +74,7 @@ func (r *postgresRefundRepository) Update(ctx context.Context, refund *entity.Re
 
 // toEntity converts GORM model to domain entity
 func toEntity(model *infra.LenderRefund) *entity.Refund {
-	return &entity.Refund{
+	refund := &entity.Refund{
 		ID:            model.ID,
 		RefundID:      model.RefundID,
 		PaymentID:     model.PaymentID,
@@ -82,18 +82,31 @@ func toEntity(model *infra.LenderRefund) *entity.Refund {
 		Lender:        model.Lender,
 		Amount:        model.Amount,
 		Currency:      model.Currency,
-		Status:        model.Status,
-		Reason:        model.Reason,
+		Status:        entity.RefundStatus(model.Status),
 		LenderRefID:   model.LenderRefID,
 		LenderStatus:  model.LenderStatus,
 		LenderMessage: model.LenderMessage,
 		CreatedAt:     model.CreatedAt,
 		UpdatedAt:     model.UpdatedAt,
 	}
+
+	// Map reason
+	if model.Reason != nil {
+		reason := entity.RefundReason(*model.Reason)
+		refund.Reason = &reason
+	}
+
+	return refund
 }
 
 // toModel converts domain entity to GORM model
 func toModel(e *entity.Refund) *infra.LenderRefund {
+	var reason *string
+	if e.Reason != nil {
+		reasonStr := string(*e.Reason)
+		reason = &reasonStr
+	}
+
 	return &infra.LenderRefund{
 		ID:            e.ID,
 		RefundID:      e.RefundID,
@@ -102,8 +115,8 @@ func toModel(e *entity.Refund) *infra.LenderRefund {
 		Lender:        e.Lender,
 		Amount:        e.Amount,
 		Currency:      e.Currency,
-		Status:        e.Status,
-		Reason:        e.Reason,
+		Status:        string(e.Status),
+		Reason:        reason,
 		LenderRefID:   e.LenderRefID,
 		LenderStatus:  e.LenderStatus,
 		LenderMessage: e.LenderMessage,

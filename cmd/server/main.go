@@ -16,6 +16,7 @@ import (
 	pg "lending-hub-service/internal/infrastructure/postgres"
 	"lending-hub-service/internal/domain/onboarding"
 	"lending-hub-service/internal/domain/order"
+	"lending-hub-service/internal/domain/refund"
 	"lending-hub-service/internal/domain/profile"
 	"lending-hub-service/internal/shared/middleware"
 )
@@ -134,6 +135,10 @@ func registerRoutes(router *gin.Engine, db *gorm.DB) {
 		// Order module routes
 		orderModule := order.NewModuleWithStubs(db, profileModule.Updater)
 		orderModule.RegisterRoutes(payin3Group)
+
+		// Refund module routes
+		refundModule := refund.NewModuleWithStubs(db, profileModule.Updater)
+		refundModule.RegisterRoutes(payin3Group)
 	}
 }
 

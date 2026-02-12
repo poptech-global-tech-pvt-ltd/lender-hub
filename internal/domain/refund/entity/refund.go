@@ -11,8 +11,8 @@ type Refund struct {
 	Lender        string
 	Amount        float64
 	Currency      string
-	Status        string
-	Reason        *string
+	Status        RefundStatus
+	Reason        *RefundReason
 	LenderRefID   *string
 	LenderStatus  *string
 	LenderMessage *string
