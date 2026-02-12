@@ -11,10 +11,10 @@ type Order struct {
 	Lender               string
 	Amount               float64
 	Currency             string
-	Status               string
+	Status               OrderStatus
 	Source               *string
 	ReturnURL            *string
-	EMIPlan              []byte
+	EMIPlan              []byte // JSONB
 	LenderOrderID        *string
 	LenderMerchantTxnID  *string
 	LenderLastStatus     *string

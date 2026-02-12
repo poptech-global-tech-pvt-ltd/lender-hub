@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -43,12 +44,15 @@ func (r *postgresIdempotencyRepository) TryAcquire(ctx context.Context, key, req
 	// Note: This is a simplified version. In production, you'd want to handle
 	// unique constraint violations more carefully, possibly using database-level
 	// transactions or SELECT FOR UPDATE.
+	now := time.Now().UTC()
 	newRecord := &infra.LenderIdempotencyKey{
 		IdempotencyKey:  key,
 		RequestHash:     requestHash,
 		Status:          "PROCESSING",
 		ResponsePayload: nil,
 		LenderOrderID:   nil,
+		CreatedAt:       now,
+		ExpiresAt:       now.Add(24 * time.Hour), // Expire after 24 hours
 	}
 
 	createErr := r.db.WithContext(ctx).Create(newRecord).Error
@@ -115,9 +119,9 @@ func (r *postgresIdempotencyRepository) Get(ctx context.Context, key string) (*e
 func toIdempotencyEntity(model *infra.LenderIdempotencyKey) *entity.IdempotencyKey {
 	return &entity.IdempotencyKey{
 		ID:              model.ID,
-		IdempotencyKey:  model.IdempotencyKey,
+		Key:             model.IdempotencyKey,
 		RequestHash:     model.RequestHash,
-		Status:          model.Status,
+		Status:          entity.IdempotencyStatus(model.Status),
 		ResponsePayload: model.ResponsePayload,
 		LenderOrderID:   model.LenderOrderID,
 		CreatedAt:       model.CreatedAt,
