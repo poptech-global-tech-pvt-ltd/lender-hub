@@ -16,6 +16,7 @@ Each .md file records what was built, design decisions, and verification steps.
 | 3C | [phase-3c-lazypay-clients.md](./phase-3c-lazypay-clients.md) | Lazypay clients + adapter wiring |
 | 4A | [phase-4a-kafka-redis.md](./phase-4a-kafka-redis.md) | Kafka producer/consumer + Redis cache |
 | 4B | [phase-4b-observability.md](./phase-4b-observability.md) | Structured logging + Datadog metrics |
+| 4C | [phase-4c-middleware-wiring.md](./phase-4c-middleware-wiring.md) | Middleware + request context + health + main.go |
 
 ## How to Use
 
@@ -64,6 +65,9 @@ Phase 4A (Kafka + Redis)
 
 Phase 4B (Observability)
   └─ No dependencies (foundation layer)
+
+Phase 4C (Middleware + Wiring)
+  └─ Depends on: 4A (Kafka, Redis), 4B (Logger, Metrics)
 ```
 
 ## Quick Start
