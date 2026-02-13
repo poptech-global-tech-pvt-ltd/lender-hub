@@ -11,45 +11,40 @@ type MetricsClient interface {
 	Close() error
 }
 
-// ═══════════════════════════════════════════
-// Business metrics — track product outcomes
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// Business metrics ONLY
+// System metrics (API latency, DB, cache, panics) → Datadog Agent
+// Provider metrics (Lazypay calls, errors, latency) → dd-trace-go
+// ═══════════════════════════════════════════════════════════
+
+// Eligibility
 const (
-	MetricOrdersCreated         = "orders.created"
-	MetricOrdersSuccess         = "orders.success"
-	MetricOrdersFailed          = "orders.failed"
-	MetricEligibilityChecks     = "eligibility.checks"
+	MetricEligibilityChecked    = "eligibility.checked"
 	MetricEligibilityEligible   = "eligibility.eligible"
 	MetricEligibilityIneligible = "eligibility.ineligible"
-	MetricOnboardingStarted     = "onboarding.started"
-	MetricOnboardingCompleted   = "onboarding.completed"
-	MetricOnboardingFailed      = "onboarding.failed"
-	MetricRefundsInitiated      = "refunds.initiated"
-	MetricRefundsCompleted      = "refunds.completed"
-	MetricIdempotencyDuplicate  = "idempotency.duplicates"
 )
 
-// ═══════════════════════════════════════════
-// Provider metrics — track Lazypay call health
-// ═══════════════════════════════════════════
+// Onboarding
 const (
-	MetricLazypayRequests     = "lazypay.requests"
-	MetricLazypayErrors       = "lazypay.errors"
-	MetricLazypayLatency      = "lazypay.latency"
-	MetricLazypayCircuitState = "lazypay.circuit_breaker.state"
-	MetricLazypayTimeout      = "lazypay.timeout"
+	MetricOnboardingStarted   = "onboarding.started"
+	MetricOnboardingCompleted = "onboarding.completed"
+	MetricOnboardingFailed    = "onboarding.failed"
 )
 
-// ═══════════════════════════════════════════
-// System metrics — track infra health
-// ═══════════════════════════════════════════
+// Order
 const (
-	MetricAPILatency    = "api.latency"
-	MetricAPIRequests   = "api.requests"
-	MetricAPIErrors     = "api.errors"
-	MetricDBQueryTime   = "db.query.duration"
-	MetricDBConnections = "db.connections.active"
-	MetricCacheHit      = "cache.hit"
-	MetricCacheMiss     = "cache.miss"
-	MetricPanics        = "panics"
+	MetricOrderCreated = "order.created"
+	MetricOrderSuccess = "order.success"
+	MetricOrderFailed  = "order.failed"
+)
+
+// Refund
+const (
+	MetricRefundInitiated = "refund.initiated"
+	MetricRefundCompleted = "refund.completed"
+)
+
+// Idempotency
+const (
+	MetricIdempotencyDuplicate = "idempotency.duplicate"
 )

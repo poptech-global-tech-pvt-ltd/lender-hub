@@ -83,3 +83,8 @@ func (c *RedisProfileCache) Invalidate(ctx context.Context, userID, lender strin
 func (c *RedisProfileCache) Close() error {
 	return c.client.Close()
 }
+
+// Client returns the underlying redis.Client for health checks
+func (c *RedisProfileCache) Client() *redis.Client {
+	return c.client
+}

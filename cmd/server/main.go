@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,123 +11,106 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
+	_ "github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 
+	// Config
 	"lending-hub-service/config"
 	pg "lending-hub-service/internal/infrastructure/postgres"
+
+	// Infrastructure - Phase 4A
 	"lending-hub-service/internal/infrastructure/cache"
 	"lending-hub-service/internal/infrastructure/kafka"
-	"lending-hub-service/internal/adapter/lazypay"
-	lazypayConfig "lending-hub-service/internal/adapter/lazypay/config"
-	"lending-hub-service/internal/domain/onboarding"
-	onbPort "lending-hub-service/internal/domain/onboarding/port"
-	onbStub "lending-hub-service/internal/domain/onboarding/stub"
-	"lending-hub-service/internal/domain/order"
-	orderPort "lending-hub-service/internal/domain/order/port"
-	orderStub "lending-hub-service/internal/domain/order/stub"
-	orderRepo "lending-hub-service/internal/domain/order/repository"
-	"lending-hub-service/internal/domain/refund"
-	refundPort "lending-hub-service/internal/domain/refund/port"
-	refundStub "lending-hub-service/internal/domain/refund/stub"
-	"lending-hub-service/internal/domain/profile"
-	profilePort "lending-hub-service/internal/domain/profile/port"
-	profileStub "lending-hub-service/internal/domain/profile/stub"
-	"lending-hub-service/internal/shared/middleware"
+
+	// Infrastructure - Phase 4B (logging + business metrics)
+	"lending-hub-service/internal/infrastructure/observability/logging"
+	"lending-hub-service/internal/infrastructure/observability/metrics"
+
+	// Infrastructure - Phase 4C
+	"lending-hub-service/internal/infrastructure/health"
+	"lending-hub-service/internal/infrastructure/middleware"
 )
 
 func main() {
-	// Parse command-line flags
+	// ═══════════════════════════════════════
+	// 1. Load configuration
+	// ═══════════════════════════════════════
 	configPath := flag.String("config", "", "path to config file")
 	flag.Parse()
 
-	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		// Use standard log since logger not initialized yet
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Starting lending-hub-service in %s environment", cfg.Env)
-
-	// Initialize database
-	db, err := pg.NewDB(cfg.DB)
+	// ═══════════════════════════════════════
+	// 2. Initialize logging (Phase 4B)
+	// ═══════════════════════════════════════
+	logger, err := logging.NewLogger("payin3-service", cfg.Env)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
+
+	// ═══════════════════════════════════════
+	// 3. Initialize business metrics (Phase 4B + 4B-FIX)
+	//    System/provider metrics handled by DD Agent — not here
+	// ═══════════════════════════════════════
+	var mc metrics.MetricsClient
+	ddCfg := metrics.DefaultConfig()
+	ddCfg.Enabled = false // TODO: add to config.Config if needed
+	if ddCfg.Enabled {
+		mc, err = metrics.NewDatadogClient(ddCfg)
+		if err != nil {
+			logger.Error("failed to init Datadog, falling back to noop",
+				logging.ErrorCode(err.Error()))
+			mc = metrics.NewNoopClient()
+		} else {
+			logger.Info("Datadog metrics enabled")
+		}
+	} else {
+		mc = metrics.NewNoopClient()
+		logger.Info("Using noop metrics client")
+	}
+	defer mc.Close()
+
+	// ═══════════════════════════════════════
+	// 4. Initialize database
+	// ═══════════════════════════════════════
+	gormDB, err := pg.NewDB(cfg.DB)
+	if err != nil {
+		logger.Fatal("failed to connect database", logging.ErrorCode(err.Error()))
 	}
 	defer func() {
-		if err := pg.Close(db); err != nil {
-			log.Printf("Error closing database: %v", err)
+		if err := pg.Close(gormDB); err != nil {
+			logger.Error("failed to close database", logging.ErrorCode(err.Error()))
 		}
 	}()
 
-	// Verify database connection
-	if err := pg.HealthCheck(db); err != nil {
-		log.Fatalf("Database health check failed: %v", err)
-	}
-	log.Println("Database connection established")
-
-	// Set Gin mode based on environment
-	if cfg.Env == "production" {
-		gin.SetMode(gin.ReleaseMode)
+	// Get underlying sql.DB for health checks
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		logger.Fatal("failed to get sql.DB", logging.ErrorCode(err.Error()))
 	}
 
-	// Initialize Gin router
-	router := gin.New()
+	// Apply connection pool settings (already done in NewDB, but ensure)
+	sqlDB.SetMaxOpenConns(cfg.DB.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.DB.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(cfg.DB.ConnMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(cfg.DB.ConnMaxIdleTime)
 
-	// Register global middleware
-	router.Use(
-		middleware.RequestID(),
-		middleware.Logging(),
-		middleware.Recovery(),
-	)
-
-	// Register routes
-	registerRoutes(router, db, cfg)
-
-	// Create HTTP server
-	addr := ":" + cfg.HTTP.Port
-	server := &http.Server{
-		Addr:         addr,
-		Handler:      router,
-		ReadTimeout:  cfg.HTTP.ReadTimeout,
-		WriteTimeout: cfg.HTTP.WriteTimeout,
+	if err := sqlDB.Ping(); err != nil {
+		logger.Fatal("database ping failed", logging.ErrorCode(err.Error()))
 	}
+	logger.Info("database connected")
 
-	// Start server in goroutine
-	go func() {
-		log.Printf("Server listening on %s", addr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
-		}
-	}()
-
-	// Wait for interrupt signal for graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("Shutting down server...")
-
-	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
-	defer cancel()
-
-	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
-	}
-
-	log.Println("Server stopped gracefully")
-}
-
-// registerRoutes sets up all HTTP routes
-func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
-	// Health check endpoint
-	router.GET("/health", healthHandler(db))
-
-	// Readiness check endpoint
-	router.GET("/ready", readyHandler(db))
-
-	// Initialize cache (Redis or memory)
-	var profileCache profilePort.ProfileCache
+	// ═══════════════════════════════════════
+	// 5. Initialize Redis cache (Phase 4A)
+	// ═══════════════════════════════════════
+	var redisClient *redis.Client
 	if cfg.Redis.Addr != "" {
 		redisCfg := cache.RedisConfig{
 			Address:      cfg.Redis.Addr,
@@ -141,20 +124,22 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		}
 		redisCache, err := cache.NewRedisProfileCache(redisCfg)
 		if err != nil {
-			log.Printf("Failed to connect to Redis, using memory cache: %v", err)
-			profileCache = cache.NewMemoryProfileCache(60 * time.Second)
+			logger.Error("failed to init Redis, falling back to memory cache",
+				logging.ErrorCode(err.Error()))
+			redisClient = nil
 		} else {
-			profileCache = redisCache
-			log.Println("Using Redis cache")
+			// Extract underlying redis.Client for health checks
+			redisClient = redisCache.Client()
+			logger.Info("Using Redis cache")
 		}
 	} else {
-		profileCache = cache.NewMemoryProfileCache(60 * time.Second)
-		log.Println("Using memory cache (no Redis config)")
+		logger.Info("Using memory cache (no Redis config)")
 	}
 
-	// Initialize event publishers (Kafka or noop)
-	var profilePublisher profilePort.ProfileEventPublisher
-	var orderPublisher orderPort.OrderEventPublisher
+	// ═══════════════════════════════════════
+	// 6. Initialize Kafka producer (Phase 4A)
+	// ═══════════════════════════════════════
+	var producer kafka.EventPublisher
 	if len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Enabled {
 		producerCfg := kafka.ProducerConfig{
 			Brokers:         cfg.Kafka.Brokers,
@@ -165,138 +150,106 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			Retries:         3,
 			RequiredAcks:    "all",
 		}
-		producer, err := kafka.NewProducer(producerCfg)
+		kafkaProducer, err := kafka.NewProducer(producerCfg)
 		if err != nil {
-			log.Printf("Failed to create Kafka producer, using noop: %v", err)
-			profilePublisher = kafka.NewProfileEventPublisher(kafka.NewNoopProducer())
-			orderPublisher = kafka.NewOrderEventPublisher(kafka.NewNoopProducer())
+			logger.Error("failed to init Kafka, falling back to noop",
+				logging.ErrorCode(err.Error()))
+			producer = kafka.NewNoopProducer()
 		} else {
-			profilePublisher = kafka.NewProfileEventPublisher(producer)
-			orderPublisher = kafka.NewOrderEventPublisher(producer)
-			log.Println("Using Kafka event publishers")
+			producer = kafkaProducer
+			logger.Info("Using Kafka producer")
 		}
 	} else {
-		profilePublisher = kafka.NewProfileEventPublisher(kafka.NewNoopProducer())
-		orderPublisher = kafka.NewOrderEventPublisher(kafka.NewNoopProducer())
-		log.Println("Using noop event publishers (no Kafka config)")
+		producer = kafka.NewNoopProducer()
+		logger.Info("Using noop producer (no Kafka config)")
+	}
+	defer producer.Close()
+
+	// ═══════════════════════════════════════
+	// 7. Lazypay adapter (placeholder — wired in Phase 5)
+	// ═══════════════════════════════════════
+	// lazypayClient := lazypay.NewClient(cfg.Lazypay, profileExecutor, paymentExecutor)
+
+	// ═══════════════════════════════════════
+	// 8. Domain modules (placeholder — wired in Phase 6+)
+	// ═══════════════════════════════════════
+	// profileModule := profile.NewModule(gormDB, profileGateway, profileCache, mc, logger)
+	// onboardingModule := onboarding.NewModule(gormDB, onboardingGateway, eventStore, mc, logger)
+	// orderModule := order.NewModule(gormDB, orderGateway, producer, mc, logger)
+	// refundModule := refund.NewModule(gormDB, refundGateway, mc, logger)
+
+	// ═══════════════════════════════════════
+	// 9. Setup Gin router + middleware
+	//    NOTE: No metrics middleware — DD APM auto-instruments Gin
+	// ═══════════════════════════════════════
+	if cfg.Env == "production" {
+		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// Initialize gateways (real or stub)
-	var (
-		profileGW    profilePort.ProfileGateway
-		onboardingGW onbPort.OnboardingGateway
-		orderGW      orderPort.OrderGateway
-		refundGW     refundPort.RefundGateway
+	router := gin.New() // New() not Default() — we register our own middleware
+
+	// Health endpoints (registered before middleware — no auth/context needed)
+	healthHandler := health.NewHealthHandler(sqlDB, redisClient)
+	healthHandler.RegisterRoutes(router)
+
+	// Global middleware stack (order matters)
+	router.Use(
+		middleware.RequestID(),                         // 1. Generate/extract request ID
+		middleware.Recovery(logger),                    // 2. Panic recovery + structured log
+		middleware.RequestLogging(logger),              // 3. Structured request/response log
+		middleware.ContextHeaders(map[string]bool{      // 4. Extract platform context headers
+			"/health":       true,
+			"/health/ready": true,
+		}),
 	)
 
-	// Check if Lazypay config is present
-	if cfg.Lazypay.BaseURL != "" && cfg.Lazypay.AccessKey != "" {
-		// Real Lazypay adapter
-		lpCfg := &lazypayConfig.LazypayConfig{
-			BaseURL:        cfg.Lazypay.BaseURL,
-			AccessKey:      cfg.Lazypay.AccessKey,
-			SecretKey:      cfg.Lazypay.SecretKey,
-			MerchantID:     "", // TODO: add to config if needed
-			ProfileTimeout: 10, // Default, can be overridden
-			PaymentTimeout: 5,  // Default, can be overridden
-			WebhookSecret:  "", // TODO: add to config if needed
-		}
-		lpClient := lazypay.NewAdapter(lpCfg)
-		profileGW = lpClient.ProfileGateway()
-		onboardingGW = lpClient.OnboardingGateway()
-		orderGW = lpClient.OrderGateway()
-		refundGW = lpClient.RefundGateway()
-		log.Println("Using Lazypay adapter")
-	} else {
-		// Stub gateways for local dev
-		profileGW = profileStub.NewStubProfileGateway()
-		onboardingGW = onbStub.NewStubOnboardingGateway()
-		orderGW = orderStub.NewStubOrderGateway()
-		refundGW = refundStub.NewStubRefundGateway()
-		log.Println("Using stub gateways (no Lazypay config)")
-	}
-
-	// API version group
-	v1 := router.Group("/v1")
+	// API route group
+	v1 := router.Group("/v1/payin3")
 	{
-		// Placeholder ping endpoint
-		v1.GET("/ping", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{
-				"message": "pong",
-				"service": "lending-hub-service",
-			})
-		})
-
-		// Profile module routes
-		profileModule := profile.NewModule(db, profileGW, profileCache, profilePublisher)
-		payin3Group := v1.Group("/payin3")
-		profileModule.RegisterRoutes(payin3Group)
-
-		// Onboarding module routes
-		onboardingModule := onboarding.NewModule(db, onboardingGW, profileModule.Updater)
-		onboardingModule.RegisterRoutes(payin3Group)
-
-		// Order module routes
-		orderModule := order.NewModule(db, orderGW, profileModule.Updater, orderPublisher)
-		orderModule.RegisterRoutes(payin3Group)
-
-		// Refund module routes
-		orderRepo := orderRepo.NewOrderRepository(db)
-		refundModule := refund.NewModule(db, refundGW, orderRepo, profileModule.Updater)
-		refundModule.RegisterRoutes(payin3Group)
+		// Module routes registered here in Phase 6+:
+		// profileModule.RegisterRoutes(v1)
+		// onboardingModule.RegisterRoutes(v1)
+		// orderModule.RegisterRoutes(v1)
+		// refundModule.RegisterRoutes(v1)
+		_ = v1
 	}
-}
 
-// healthHandler returns basic health status
-func healthHandler(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// Check database health
-		if err := pg.HealthCheck(db); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"status": "unhealthy",
-				"checks": gin.H{
-					"database": gin.H{
-						"status": "down",
-						"error":  err.Error(),
-					},
-				},
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"status": "healthy",
-			"checks": gin.H{
-				"database": gin.H{
-					"status": "up",
-				},
-			},
-		})
+	// ═══════════════════════════════════════
+	// 10. Start HTTP server with graceful shutdown
+	// ═══════════════════════════════════════
+	port := cfg.HTTP.Port
+	if port == "" {
+		port = "8080"
 	}
-}
-
-// readyHandler returns readiness status with detailed metrics
-func readyHandler(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// Check database health
-		if err := pg.HealthCheck(db); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"ready": false,
-				"error": err.Error(),
-			})
-			return
-		}
-
-		// Get database stats
-		stats, err := pg.Stats(db)
-		if err != nil {
-			log.Printf("Failed to get DB stats: %v", err)
-			stats = gin.H{"error": "stats unavailable"}
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"ready":    true,
-			"database": stats,
-		})
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%s", port),
+		Handler:      router,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
+
+	go func() {
+		logger.Info("starting server",
+			logging.Endpoint(fmt.Sprintf(":%s", port)),
+		)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatal("server failed", logging.ErrorCode(err.Error()))
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Info("shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Fatal("server forced shutdown", logging.ErrorCode(err.Error()))
+	}
+
+	logger.Info("server stopped")
 }

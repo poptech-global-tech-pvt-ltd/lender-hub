@@ -221,3 +221,50 @@ noop.Close() // Should not error
 - **Production JSON**: Structured JSON output for log aggregation
 - **Development Colored**: Human-readable colored output for local dev
 - **Graceful Shutdown**: Both metrics and logging support `Close()`/`Sync()`
+
+---
+
+## 4B-FIX: Namespace Rename + Metric Cleanup
+
+**Date:** 2026-02-13  
+**Reason:** Datadog Agent auto-tracks system and provider metrics
+
+**Changes:**
+1. Namespace: "payin3" → "lsp" (all metrics now prefixed `lsp.*`)
+2. Dropped system metrics — handled by DD Agent APM + integrations:
+   - `api.requests`, `api.latency`, `api.errors`
+   - `db.query.duration`, `db.connections.active`
+   - `cache.hit`, `cache.miss`
+   - `panics`
+3. Dropped provider metrics — handled by dd-trace-go HTTP client wrapping:
+   - `lazypay.requests`, `lazypay.errors`, `lazypay.latency`
+   - `lazypay.circuit_breaker.state`, `lazypay.timeout`
+4. Retained 12 business-only metrics (see table below)
+
+**Final metric inventory:**
+
+| Metric Name | Type | Tags | Purpose |
+|-------------|------|------|---------|
+| `lsp.eligibility.checked` | Count | provider, source | Eligibility check calls |
+| `lsp.eligibility.eligible` | Count | provider | Users found eligible |
+| `lsp.eligibility.ineligible` | Count | provider, reasonCode | Users found ineligible |
+| `lsp.onboarding.started` | Count | provider, source | Onboarding initiations |
+| `lsp.onboarding.completed` | Count | provider | Successful onboardings |
+| `lsp.onboarding.failed` | Count | provider, reasonCode | Failed onboardings |
+| `lsp.order.created` | Count | provider | Order creation attempts |
+| `lsp.order.success` | Count | provider | Successful payments |
+| `lsp.order.failed` | Count | provider, errorCode | Failed payments |
+| `lsp.refund.initiated` | Count | provider | Refund requests |
+| `lsp.refund.completed` | Count | provider | Completed refunds |
+| `lsp.idempotency.duplicate` | Count | — | Duplicate order attempts caught |
+
+**Files modified:** `config.go`, `metrics.go` (2 files only)  
+**Files unchanged:** `datadog.go`, `noop.go`, `logging/logger.go`, `logging/context.go`
+
+**What Datadog Agent Handles Automatically:**
+- HTTP request count, latency, errors per endpoint → DD APM + dd-trace-go/contrib/gin
+- Database query duration, connection pool stats → DD Postgres integration
+- Redis commands, latency, hit/miss → DD Redis integration
+- Outbound HTTP calls to Lazypay (count, latency, errors) → dd-trace-go/contrib/net/http
+- Go runtime (goroutines, GC, memory) → DD runtime metrics
+- Container/infra (CPU, memory, network) → DD Agent
