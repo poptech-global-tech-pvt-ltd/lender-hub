@@ -9,6 +9,7 @@ const (
 	PathCreateOrder      = "/cof/v0/payment/order"
 	PathOrderEnquiry     = "/cof/v0/payment/enquiry"
 	PathRefund           = "/v7/refund"
+	PathRefundEnquiry    = "/v3/enquiry"
 )
 
 // Lazypay error codes (provider-specific)
@@ -25,6 +26,7 @@ const (
 	LPErrRateLimitExceeded    = "RATE_LIMIT_EXCEEDED"
 	LPErrKYCFailed            = "KYC_FAILED"
 	LPErrPANVerificationLimit = "PAN_VERIFICATION_LIMIT_EXHAUSTED"
+	LPErrDuplicateRefund      = "LP_DUPLICATE_REFUND"
 )
 
 // HTTP headers

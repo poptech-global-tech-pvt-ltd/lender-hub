@@ -44,6 +44,23 @@ func (r *postgresRefundRepository) GetByRefundID(ctx context.Context, refundID s
 	return toEntity(&model), nil
 }
 
+// GetByProviderRefID retrieves a refund by lender and provider_refund_ref_id (idempotency check)
+func (r *postgresRefundRepository) GetByProviderRefID(ctx context.Context, lender, providerRefID string) (*entity.Refund, error) {
+	var model infra.LenderRefund
+	err := r.db.WithContext(ctx).
+		Where("lender = ? AND provider_refund_ref_id = ?", lender, providerRefID).
+		First(&model).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return toEntity(&model), nil
+}
+
 // ListByPaymentID lists all refunds for a payment
 func (r *postgresRefundRepository) ListByPaymentID(ctx context.Context, paymentID string) ([]*entity.Refund, error) {
 	var models []infra.LenderRefund
@@ -75,19 +92,24 @@ func (r *postgresRefundRepository) Update(ctx context.Context, refund *entity.Re
 // toEntity converts GORM model to domain entity
 func toEntity(model *infra.LenderRefund) *entity.Refund {
 	refund := &entity.Refund{
-		ID:            model.ID,
-		RefundID:      model.RefundID,
-		PaymentID:     model.PaymentID,
-		UserID:        model.UserID,
-		Lender:        model.Lender,
-		Amount:        model.Amount,
-		Currency:      model.Currency,
-		Status:        entity.RefundStatus(model.Status),
-		LenderRefID:   model.LenderRefID,
-		LenderStatus:  model.LenderStatus,
-		LenderMessage: model.LenderMessage,
-		CreatedAt:     model.CreatedAt,
-		UpdatedAt:     model.UpdatedAt,
+		ID:                     model.ID,
+		RefundID:               model.RefundID,
+		PaymentID:              model.PaymentID,
+		UserID:                 model.UserID,
+		Lender:                 model.Lender,
+		Amount:                 model.Amount,
+		Currency:               model.Currency,
+		Status:                 entity.RefundStatus(model.Status),
+		ProviderMerchantTxnID:  model.ProviderMerchantTxnID,
+		ProviderParentTxnID:    model.ProviderParentTxnID,
+		ProviderRefundTxnID:    model.ProviderRefundTxnID,
+		ProviderRefundRefID:    model.ProviderRefundRefID,
+		LenderRefID:            model.LenderRefID,
+		LenderStatus:           model.LenderStatus,
+		LenderMessage:          model.LenderMessage,
+		LastEnquiredAt:         model.LastEnquiredAt,
+		CreatedAt:              model.CreatedAt,
+		UpdatedAt:              model.UpdatedAt,
 	}
 
 	// Map reason
@@ -108,19 +130,24 @@ func toModel(e *entity.Refund) *infra.LenderRefund {
 	}
 
 	return &infra.LenderRefund{
-		ID:            e.ID,
-		RefundID:      e.RefundID,
-		PaymentID:     e.PaymentID,
-		UserID:        e.UserID,
-		Lender:        e.Lender,
-		Amount:        e.Amount,
-		Currency:      e.Currency,
-		Status:        string(e.Status),
-		Reason:        reason,
-		LenderRefID:   e.LenderRefID,
-		LenderStatus:  e.LenderStatus,
-		LenderMessage: e.LenderMessage,
-		CreatedAt:     e.CreatedAt,
-		UpdatedAt:     e.UpdatedAt,
+		ID:                     e.ID,
+		RefundID:               e.RefundID,
+		PaymentID:              e.PaymentID,
+		UserID:                 e.UserID,
+		Lender:                 e.Lender,
+		Amount:                 e.Amount,
+		Currency:               e.Currency,
+		Status:                 string(e.Status),
+		Reason:                 reason,
+		ProviderMerchantTxnID:  e.ProviderMerchantTxnID,
+		ProviderParentTxnID:    e.ProviderParentTxnID,
+		ProviderRefundTxnID:    e.ProviderRefundTxnID,
+		ProviderRefundRefID:    e.ProviderRefundRefID,
+		LenderRefID:            e.LenderRefID,
+		LenderStatus:           e.LenderStatus,
+		LenderMessage:          e.LenderMessage,
+		LastEnquiredAt:         e.LastEnquiredAt,
+		CreatedAt:              e.CreatedAt,
+		UpdatedAt:              e.UpdatedAt,
 	}
 }

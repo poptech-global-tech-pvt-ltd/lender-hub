@@ -49,6 +49,13 @@ func (s *SignatureService) SignOrder(merchantTxnID string, amount float64) strin
 	return s.hmacSHA1(data)
 }
 
+// SignEnquiry signs enquiry request
+// data = merchantTxnId + secretKey
+func (s *SignatureService) SignEnquiry(merchantTxnID string) string {
+	data := merchantTxnID + s.secretKey
+	return s.hmacSHA1(data)
+}
+
 // VerifyWebhook compares received signature against computed one
 func (s *SignatureService) VerifyWebhook(payload []byte, receivedSig string) bool {
 	h := hmac.New(sha1.New, []byte(s.secretKey))

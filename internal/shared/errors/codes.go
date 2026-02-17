@@ -3,19 +3,19 @@ package errors
 // Shared canonical error codes used across all modules
 const (
 	// Generic
-	CodeInvalidRequest      = "INVALID_REQUEST"
-	CodeInternalError       = "INTERNAL_ERROR"
-	CodeNotFound            = "NOT_FOUND"
-	CodeConflict            = "CONFLICT"
-	CodeUnauthorized        = "AUTHENTICATION_FAILED"
-	CodeRateLimited         = "RATE_LIMIT_EXCEEDED"
+	CodeInvalidRequest = "INVALID_REQUEST"
+	CodeInternalError  = "INTERNAL_ERROR"
+	CodeNotFound       = "NOT_FOUND"
+	CodeConflict       = "CONFLICT"
+	CodeUnauthorized   = "AUTHENTICATION_FAILED"
+	CodeRateLimited    = "RATE_LIMIT_EXCEEDED"
 
 	// Profile-specific
-	CodeUserBlocked         = "PAYIN3_USER_BLOCKED"
-	CodeInsufficientLimit   = "PAYIN3_INSUFFICIENT_LIMIT"
-	CodeUserDataInvalid     = "PAYIN3_USER_DATA_INVALID"
-	CodeUserNotFound        = "PAYIN3_USER_NOT_FOUND"
-	CodeInvalidTransition   = "PAYIN3_INVALID_STATE_TRANSITION"
+	CodeUserBlocked       = "PAYIN3_USER_BLOCKED"
+	CodeInsufficientLimit = "PAYIN3_INSUFFICIENT_LIMIT"
+	CodeUserDataInvalid   = "PAYIN3_USER_DATA_INVALID"
+	CodeUserNotFound      = "PAYIN3_USER_NOT_FOUND"
+	CodeInvalidTransition = "PAYIN3_INVALID_STATE_TRANSITION"
 
 	// Onboarding-specific
 	CodeOnboardingNotFound  = "ONBOARDING_NOT_FOUND"
@@ -35,6 +35,7 @@ const (
 	CodeOrderNotFound       = "ORDER_NOT_FOUND"
 
 	// Refund-specific
-	CodeRefundNotFound      = "REFUND_NOT_FOUND"
-	CodeRefundExceedsOrder  = "REFUND_EXCEEDS_ORDER_AMOUNT"
+	CodeRefundNotFound     = "REFUND_NOT_FOUND"
+	CodeRefundExceedsOrder = "REFUND_EXCEEDS_ORDER_AMOUNT"
+	CodeDuplicateRefund    = "DUPLICATE_REFUND"
 )

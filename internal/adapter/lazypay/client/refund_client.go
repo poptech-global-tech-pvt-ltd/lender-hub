@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"net/http"
 
-	refundReq "lending-hub-service/internal/domain/refund/dto/request"
-	refundResp "lending-hub-service/internal/domain/refund/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/config"
 	lpConstants "lending-hub-service/internal/adapter/lazypay/constants"
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
+	refundReq "lending-hub-service/internal/domain/refund/dto/request"
+	refundResp "lending-hub-service/internal/domain/refund/dto/response"
+	refundPort "lending-hub-service/internal/domain/refund/port"
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 )
@@ -58,7 +59,7 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRe
 		URL:    c.config.BaseURL + lpConstants.PathRefund,
 		Headers: map[string]string{
 			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderSignature:  sig,
+			lpConstants.HeaderSignature:   sig,
 			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
 		},
 		Body: bytes.NewReader(jsonBody),
@@ -83,6 +84,73 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRe
 
 	// Map to canonical response
 	return mapper.FromLPRefundResponse(&lpResp, req.RefundID, req.PaymentID, req.Amount, req.Currency), nil
+}
+
+// EnquireRefund implements RefundGateway.EnquireRefund
+func (c *RefundClient) EnquireRefund(ctx context.Context, merchantTxnID string) (*refundPort.EnquiryResponse, error) {
+	// Generate signature for enquiry
+	sig := c.signer.SignEnquiry(merchantTxnID)
+
+	// Build URL with query param
+	url := fmt.Sprintf("%s/api/lazypay%s?merchantTxnId=%s", c.config.BaseURL, lpConstants.PathRefundEnquiry, merchantTxnID)
+
+	// Build executor request
+	execReq := executor.Request{
+		Method: http.MethodGet,
+		URL:    url,
+		Headers: map[string]string{
+			lpConstants.HeaderAccessKey:   c.config.AccessKey,
+			lpConstants.HeaderSignature:   sig,
+			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+		},
+		Body: nil,
+	}
+
+	// Execute request
+	resp, err := c.executor.Do(ctx, execReq)
+	if err != nil {
+		return nil, fmt.Errorf("executor error: %w", err)
+	}
+
+	// Check for HTTP errors
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("enquiry API failed with status %d", resp.StatusCode)
+	}
+
+	// Unmarshal response
+	var lpResp lpResp.LPEnquiryResponse
+	if err := json.Unmarshal(resp.Body, &lpResp); err != nil {
+		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal enquiry response: "+err.Error())
+	}
+
+	// Map to canonical EnquiryResponse
+	return mapEnquiryResponse(&lpResp), nil
+}
+
+// mapEnquiryResponse converts LPEnquiryResponse to canonical EnquiryResponse
+func mapEnquiryResponse(lpResp *lpResp.LPEnquiryResponse) *refundPort.EnquiryResponse {
+	result := &refundPort.EnquiryResponse{
+		Order: refundPort.EnquiryOrder{
+			OrderID: lpResp.Order.OrderID,
+			Status:  lpResp.Order.Status,
+			Message: lpResp.Order.Message,
+		},
+		Transactions: make([]refundPort.EnquiryTransaction, len(lpResp.Transactions)),
+	}
+
+	for i, txn := range lpResp.Transactions {
+		result.Transactions[i] = refundPort.EnquiryTransaction{
+			Status:      txn.Status,
+			RespMessage: txn.RespMessage,
+			LpTxnID:     txn.LpTxnID,
+			TxnType:     txn.TxnType,
+			TxnRefNo:    txn.TxnRefNo,
+			TxnDateTime: txn.TxnDateTime,
+			Amount:      txn.Amount,
+		}
+	}
+
+	return result
 }
 
 // handleErrorResponse parses error response and returns DomainError

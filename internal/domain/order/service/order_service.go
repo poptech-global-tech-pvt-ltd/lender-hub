@@ -10,6 +10,7 @@ import (
 	"lending-hub-service/internal/domain/order/entity"
 	"lending-hub-service/internal/domain/order/port"
 	profileService "lending-hub-service/internal/domain/profile/service"
+	"lending-hub-service/internal/shared/idgen"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 )
 
@@ -21,6 +22,7 @@ type OrderService struct {
 	gateway        port.OrderGateway
 	profileUpdater *profileService.ProfileUpdater
 	publisher      port.OrderEventPublisher
+	idgen          *idgen.IDGenerator
 }
 
 // NewOrderService creates a new OrderService
@@ -31,6 +33,7 @@ func NewOrderService(
 	gateway port.OrderGateway,
 	profileUpdater *profileService.ProfileUpdater,
 	publisher port.OrderEventPublisher,
+	idgen *idgen.IDGenerator,
 ) *OrderService {
 	return &OrderService{
 		orderRepo:      orderRepo,
@@ -39,16 +42,23 @@ func NewOrderService(
 		gateway:        gateway,
 		profileUpdater: profileUpdater,
 		publisher:      publisher,
+		idgen:          idgen,
 	}
 }
 
 // CreateOrder creates a new order with idempotency
 func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderRequest) (*res.OrderResponse, error) {
+	// Generate payment ID if not provided
+	paymentID := req.PaymentID
+	if paymentID == "" {
+		paymentID = s.idgen.PaymentID()
+	}
+
 	// Compute request hash
 	requestHash := s.idempotency.ComputeHash(req)
 
 	// Acquire idempotency key
-	result, key, err := s.idempotency.Acquire(ctx, req.PaymentID, requestHash)
+	result, key, err := s.idempotency.Acquire(ctx, paymentID, requestHash)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +88,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	gatewayResp, err := s.gateway.CreateOrder(ctx, req)
 	if err != nil {
 		// Mark idempotency as failed
-		s.idempotency.Fail(ctx, req.PaymentID)
+		s.idempotency.Fail(ctx, paymentID)
 		return nil, err
 	}
 
@@ -87,7 +97,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 
 	// Create order entity
 	order := &entity.Order{
-		PaymentID:            req.PaymentID,
+		PaymentID:            paymentID,
 		UserID:               req.UserID,
 		MerchantID:           req.MerchantID,
 		Lender:               "LAZYPAY", // TODO: make configurable
@@ -106,14 +116,14 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 
 	// Persist order
 	if err := s.orderRepo.Create(ctx, order); err != nil {
-		s.idempotency.Fail(ctx, req.PaymentID)
+		s.idempotency.Fail(ctx, paymentID)
 		return nil, err
 	}
 
 	// Create payment mapping
 	if gatewayResp.LenderOrderID != nil {
 		mapping := &entity.PaymentMapping{
-			PaymentID:            req.PaymentID,
+			PaymentID:            paymentID,
 			UserID:               req.UserID,
 			Lender:               order.Lender,
 			LenderMerchantTxnID:  *gatewayResp.LenderOrderID,
@@ -128,7 +138,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 
 	// Build response
 	response := &res.OrderResponse{
-		PaymentID:     req.PaymentID,
+		PaymentID:     paymentID,
 		Status:        gatewayResp.Status,
 		LenderOrderID: gatewayResp.LenderOrderID,
 		RedirectURL:   gatewayResp.RedirectURL,
@@ -140,14 +150,14 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	responseBytes, _ := json.Marshal(response)
 
 	// Mark idempotency as completed
-	if err := s.idempotency.Complete(ctx, req.PaymentID, responseBytes, gatewayResp.LenderOrderID); err != nil {
+	if err := s.idempotency.Complete(ctx, paymentID, responseBytes, gatewayResp.LenderOrderID); err != nil {
 		// Log error but don't fail the request
 	}
 
 	// Publish event
 	s.publisher.Publish(ctx, &port.OrderEvent{
 		Type:          port.EventOrderCreated,
-		PaymentID:     req.PaymentID,
+		PaymentID:     paymentID,
 		UserID:        req.UserID,
 		MerchantID:    req.MerchantID,
 		Lender:        order.Lender,

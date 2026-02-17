@@ -11,6 +11,7 @@ import (
 	orderEntity "lending-hub-service/internal/domain/order/entity"
 	orderPort "lending-hub-service/internal/domain/order/port"
 	profileService "lending-hub-service/internal/domain/profile/service"
+	"lending-hub-service/internal/shared/idgen"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 )
 
@@ -62,7 +63,7 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 	// Calculate total refunded amount (only SUCCESS refunds)
 	totalRefunded := 0.0
 	for _, refund := range existingRefunds {
-		if refund.Status == entity.RefundSuccess {
+		if refund.Status == entity.RefundStatusSuccess {
 			totalRefunded += refund.Amount
 		}
 	}
@@ -72,9 +73,97 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 		return nil, sharedErrors.New(sharedErrors.CodeRefundExceedsOrder, 422, "refund amount exceeds order amount")
 	}
 
+	// Check for duplicate refund using providerRefundRefID (idempotency key)
+	// providerRefundRefID = req.RefundID (used as idempotency key)
+	existingRefund, err := s.refundRepo.GetByProviderRefID(ctx, order.Lender, req.RefundID)
+	if err != nil {
+		return nil, err
+	}
+	if existingRefund != nil {
+		// Return existing refund
+		return &res.RefundResponse{
+			RefundID:  existingRefund.RefundID,
+			PaymentID: existingRefund.PaymentID,
+			Provider:  "LAZYPAY",
+			Status:    string(existingRefund.Status),
+			Amount:    existingRefund.Amount,
+			Currency:  existingRefund.Currency,
+		}, nil
+	}
+
 	// Call gateway to process refund
 	gatewayResp, err := s.gateway.ProcessRefund(ctx, req)
 	if err != nil {
+		// Check if error is LP_DUPLICATE_REFUND
+		if domainErr, ok := err.(*sharedErrors.DomainError); ok && domainErr.Code == sharedErrors.CodeDuplicateRefund {
+			// Duplicate refund detected - call enquiry API to get existing refund status
+			enquiryResp, enquiryErr := s.gateway.EnquireRefund(ctx, req.PaymentID)
+			if enquiryErr != nil {
+				// If enquiry fails, return the duplicate error
+				return nil, err
+			}
+
+			// Find REFUND transaction matching our providerRefundRefID
+			var refundTxn *port.EnquiryTransaction
+			for i := range enquiryResp.Transactions {
+				txn := &enquiryResp.Transactions[i]
+				if txn.TxnType == "REFUND" && txn.TxnRefNo == req.RefundID {
+					refundTxn = txn
+					break
+				}
+			}
+
+			if refundTxn != nil {
+				// Found existing refund via enquiry - create refund entity from enquiry data
+				var reason *entity.RefundReason
+				if req.Reason != "" {
+					reasonVal := entity.RefundReason(req.Reason)
+					reason = &reasonVal
+				}
+
+				refundStatus := entity.RefundStatusPending
+				if refundTxn.Status == "SUCCESS" {
+					refundStatus = entity.RefundStatusSuccess
+				} else if refundTxn.Status == "FAILED" {
+					refundStatus = entity.RefundStatusFailed
+				} else if refundTxn.Status == "PROCESSING" {
+					refundStatus = entity.RefundStatusProcessing
+				}
+
+				refund := &entity.Refund{
+					RefundID:           req.RefundID,
+					PaymentID:          req.PaymentID,
+					UserID:             order.UserID,
+					Lender:             order.Lender,
+					Amount:             req.Amount,
+					Currency:           req.Currency,
+					Status:             refundStatus,
+					Reason:             reason,
+					ProviderRefundRefID: req.RefundID,
+					ProviderMerchantTxnID: &req.PaymentID,
+					ProviderRefundTxnID:  &refundTxn.LpTxnID,
+					LenderStatus:        &refundTxn.Status,
+					LenderMessage:       &refundTxn.RespMessage,
+					CreatedAt:           time.Now().UTC(),
+					UpdatedAt:           time.Now().UTC(),
+				}
+
+				// Persist refund
+				if err := s.refundRepo.Create(ctx, refund); err != nil {
+					return nil, err
+				}
+
+				return &res.RefundResponse{
+					RefundID:  refund.RefundID,
+					PaymentID: refund.PaymentID,
+					Provider:  "LAZYPAY",
+					Status:    string(refund.Status),
+					Amount:    refund.Amount,
+					Currency:  refund.Currency,
+				}, nil
+			}
+		}
+		// Return original error if not duplicate or enquiry failed
 		return nil, err
 	}
 
@@ -86,19 +175,22 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 	}
 
 	// Create refund entity
+	merchantTxnID := req.PaymentID
 	refund := &entity.Refund{
-		RefundID:      req.RefundID,
-		PaymentID:     req.PaymentID,
-		UserID:        order.UserID,
-		Lender:        order.Lender,
-		Amount:        req.Amount,
-		Currency:      req.Currency,
-		Status:        entity.RefundStatus(gatewayResp.Status),
-		Reason:        reason,
-		LenderRefID:   gatewayResp.LenderRefID,
-		LenderStatus:  &gatewayResp.Status,
-		CreatedAt:     time.Now().UTC(),
-		UpdatedAt:     time.Now().UTC(),
+		RefundID:            req.RefundID,
+		PaymentID:           req.PaymentID,
+		UserID:              order.UserID,
+		Lender:              order.Lender,
+		Amount:              req.Amount,
+		Currency:            req.Currency,
+		Status:              entity.RefundStatus(gatewayResp.Status),
+		Reason:              reason,
+		ProviderRefundRefID: req.RefundID, // idempotency key
+		ProviderMerchantTxnID: &merchantTxnID,
+		LenderRefID:         gatewayResp.LenderRefID,
+		LenderStatus:         &gatewayResp.Status,
+		CreatedAt:            time.Now().UTC(),
+		UpdatedAt:            time.Now().UTC(),
 	}
 
 	// Persist refund
@@ -147,7 +239,7 @@ func (s *RefundService) ProcessCallback(ctx context.Context, req req.RefundCallb
 	refund.UpdatedAt = time.Now().UTC()
 
 	// If SUCCESS, restore available limit
-	if newStatus == entity.RefundSuccess {
+	if newStatus == entity.RefundStatusSuccess {
 		// Add refund amount back to available limit
 		if err := s.profileUpdater.AddToLimit(ctx, refund.UserID, refund.Lender, refund.Amount); err != nil {
 			// Log error but don't fail callback
@@ -159,9 +251,9 @@ func (s *RefundService) ProcessCallback(ctx context.Context, req req.RefundCallb
 			totalRefunded := 0.0
 			allSuccess := true
 			for _, r := range allRefunds {
-				if r.Status == entity.RefundSuccess {
+				if r.Status == entity.RefundStatusSuccess {
 					totalRefunded += r.Amount
-				} else if r.Status != entity.RefundSuccess {
+				} else if r.Status != entity.RefundStatusSuccess {
 					allSuccess = false
 				}
 			}
@@ -185,4 +277,26 @@ func (s *RefundService) ProcessCallback(ctx context.Context, req req.RefundCallb
 	}
 
 	return nil
+}
+
+// GetRefundStatus retrieves refund status by refund ID
+func (s *RefundService) GetRefundStatus(ctx context.Context, refundID string) (*res.RefundResponse, error) {
+	refund, err := s.refundRepo.GetByRefundID(ctx, refundID)
+	if err != nil {
+		return nil, err
+	}
+	if refund == nil {
+		return nil, sharedErrors.New(sharedErrors.CodeRefundNotFound, 404, "refund not found")
+	}
+
+	status := string(refund.Status)
+	return &res.RefundResponse{
+		RefundID:    refund.RefundID,
+		PaymentID:   refund.PaymentID,
+		Provider:    "LAZYPAY",
+		Status:      status,
+		Amount:      refund.Amount,
+		Currency:    refund.Currency,
+		LenderRefID: refund.LenderRefID,
+	}, nil
 }

@@ -1,9 +1,22 @@
 package entity
 
+// RefundStatus represents the state of a refund
 type RefundStatus string
 
 const (
-	RefundPending RefundStatus = "PENDING"
-	RefundSuccess RefundStatus = "SUCCESS"
-	RefundFailed  RefundStatus = "FAILED"
+	RefundStatusPending    RefundStatus = "PENDING"
+	RefundStatusProcessing RefundStatus = "PROCESSING"
+	RefundStatusSuccess    RefundStatus = "SUCCESS"
+	RefundStatusFailed     RefundStatus = "FAILED"
+	RefundStatusUnknown    RefundStatus = "UNKNOWN"
 )
+
+// IsTerminal returns true if the status is a terminal state (SUCCESS or FAILED)
+func (s RefundStatus) IsTerminal() bool {
+	return s == RefundStatusSuccess || s == RefundStatusFailed
+}
+
+// IsResolvable returns true if the status can be resolved via enquiry (UNKNOWN or PROCESSING)
+func (s RefundStatus) IsResolvable() bool {
+	return s == RefundStatusUnknown || s == RefundStatusProcessing
+}

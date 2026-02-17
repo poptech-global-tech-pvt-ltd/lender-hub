@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/google/uuid"
-
 	req "lending-hub-service/internal/domain/onboarding/dto/request"
 	res "lending-hub-service/internal/domain/onboarding/dto/response"
 	"lending-hub-service/internal/domain/onboarding/entity"
 	"lending-hub-service/internal/domain/onboarding/port"
 	profileService "lending-hub-service/internal/domain/profile/service"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	"lending-hub-service/internal/shared/idgen"
 )
 
 // OnboardingService handles onboarding operations
@@ -22,6 +21,7 @@ type OnboardingService struct {
 	gateway        port.OnboardingGateway
 	profileUpdater *profileService.ProfileUpdater
 	processor      *EventProcessor
+	idgen          *idgen.IDGenerator
 }
 
 // NewOnboardingService creates a new OnboardingService
@@ -30,6 +30,7 @@ func NewOnboardingService(
 	eventStore port.OnboardingEventStore,
 	gateway port.OnboardingGateway,
 	profileUpdater *profileService.ProfileUpdater,
+	idgen *idgen.IDGenerator,
 ) *OnboardingService {
 	return &OnboardingService{
 		repo:           repo,
@@ -37,14 +38,14 @@ func NewOnboardingService(
 		gateway:        gateway,
 		profileUpdater: profileUpdater,
 		processor:      NewEventProcessor(),
+		idgen:          idgen,
 	}
 }
 
 // StartOnboarding initiates a new onboarding flow
 func (s *OnboardingService) StartOnboarding(ctx context.Context, req req.StartOnboardingRequest) (*res.OnboardingResponse, error) {
-	// Generate onboarding ID
-	onboardingID := uuid.NewString()
-
+	// Generate onboarding ID with ONB_ prefix
+	onboardingID := s.idgen.OnboardingID()
 	// Call gateway to start onboarding
 	gatewayResp, err := s.gateway.StartOnboarding(ctx, req)
 	if err != nil {
@@ -68,15 +69,12 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, req req.StartOn
 		UpdatedAt:            time.Now().UTC(),
 	}
 
-	// Serialize raw request
 	rawRequest, _ := json.Marshal(req)
 	onboarding.RawRequest = rawRequest
 
-	// Serialize raw response
 	rawResponse, _ := json.Marshal(gatewayResp)
 	onboarding.RawResponse = rawResponse
 
-	// Persist onboarding
 	if err := s.repo.Create(ctx, onboarding); err != nil {
 		return nil, err
 	}
@@ -98,7 +96,6 @@ func (s *OnboardingService) GetStatus(ctx context.Context, userID, onboardingID,
 	if onboardingID != "" {
 		onboarding, err = s.repo.GetByOnboardingID(ctx, onboardingID)
 	} else {
-		// Get latest onboarding for user+merchant
 		// For now, we'll need to add a method to get latest, or use GetByOnboardingID with a pattern
 		// This is a simplified version - in production you'd have GetLatestByUserAndMerchant
 		return nil, sharedErrors.New(sharedErrors.CodeOnboardingNotFound, 404, "onboarding not found")

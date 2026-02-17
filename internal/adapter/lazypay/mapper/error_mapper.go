@@ -18,6 +18,7 @@ var LPErrorMapping = map[string]*sharedErrors.DomainError{
 	"RATE_LIMIT_EXCEEDED":              sharedErrors.NewRetryable(sharedErrors.CodeRateLimited, 429, "Rate limit exceeded", "Please wait before retrying"),
 	"KYC_FAILED":                       sharedErrors.NewRetryable(sharedErrors.CodeKYCFailed, 422, "KYC verification failed", "Please verify your documents and try again"),
 	"PAN_VERIFICATION_LIMIT_EXHAUSTED": sharedErrors.NewRetryable(sharedErrors.CodeVerificationExhaust, 422, "Verification attempt limit reached", "Please try again after cooldown period"),
+	"LP_DUPLICATE_REFUND":              sharedErrors.New(sharedErrors.CodeDuplicateRefund, 409, "Refund with this ID already exists"),
 }
 
 // MapLPError converts a Lazypay error code to a canonical DomainError

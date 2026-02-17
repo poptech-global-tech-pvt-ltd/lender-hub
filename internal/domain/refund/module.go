@@ -44,7 +44,9 @@ func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdat
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 	createHandler := handler.NewCreateRefundHandler(m.Service)
 	callbackHandler := handler.NewRefundCallbackHandler(m.Service)
+	getHandler := handler.NewGetRefundHandler(m.Service)
 
 	rg.POST("/refund", createHandler.Handle)
+	rg.GET("/refund/:refundId", getHandler.Handle)
 	rg.POST("/callback/refund", callbackHandler.Handle)
 }
