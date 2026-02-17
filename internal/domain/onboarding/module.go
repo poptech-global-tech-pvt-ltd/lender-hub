@@ -10,6 +10,7 @@ import (
 	"lending-hub-service/internal/domain/onboarding/service"
 	"lending-hub-service/internal/domain/onboarding/stub"
 	profileService "lending-hub-service/internal/domain/profile/service"
+	"lending-hub-service/pkg/idgen"
 )
 
 // Module wires together all onboarding module components
@@ -18,19 +19,19 @@ type Module struct {
 }
 
 // NewModule creates a new onboarding module with dependencies
-func NewModule(db *gorm.DB, gw port.OnboardingGateway, profileUpdater *profileService.ProfileUpdater) *Module {
+func NewModule(db *gorm.DB, gw port.OnboardingGateway, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator) *Module {
 	repo := repository.NewOnboardingRepository(db)
 	eventStore := repository.NewOnboardingEventStore(db)
-	svc := service.NewOnboardingService(repo, eventStore, gw, profileUpdater)
+	svc := service.NewOnboardingService(repo, eventStore, gw, profileUpdater, idgen)
 	return &Module{
 		Service: svc,
 	}
 }
 
 // NewModuleWithStubs creates a new onboarding module with stub implementations
-func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater) *Module {
+func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator) *Module {
 	gw := stub.NewStubOnboardingGateway()
-	return NewModule(db, gw, profileUpdater)
+	return NewModule(db, gw, profileUpdater, idgen)
 }
 
 // RegisterRoutes registers onboarding module routes

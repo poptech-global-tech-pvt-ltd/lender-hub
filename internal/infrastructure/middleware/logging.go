@@ -6,11 +6,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"lending-hub-service/internal/infrastructure/observability/logging"
+	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // RequestLogging logs structured request/response information
-func RequestLogging(logger *logging.Logger) gin.HandlerFunc {
+func RequestLogging(logger *baseLogger.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
@@ -27,16 +27,16 @@ func RequestLogging(logger *logging.Logger) gin.HandlerFunc {
 		}
 
 		fields := []zap.Field{
-			logging.RequestID(requestIDStr),
+			baseLogger.RequestID(requestIDStr),
 			zap.String("method", method),
 			zap.String("path", path),
-			logging.HTTPStatus(status),
-			logging.DurationMs(duration.Milliseconds()),
+			baseLogger.HTTPStatus(status),
+			baseLogger.DurationMs(duration.Milliseconds()),
 			zap.Int("bodySize", c.Writer.Size()),
 		}
 
 		if uid, exists := c.Get("userId"); exists && uid != nil {
-			fields = append(fields, logging.UserID(uid.(string)))
+			fields = append(fields, baseLogger.UserID(uid.(string)))
 		}
 
 		switch {

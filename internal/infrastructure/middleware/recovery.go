@@ -7,11 +7,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"lending-hub-service/internal/infrastructure/observability/logging"
+	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // Recovery catches panics, logs full stack trace, returns 500 with canonical error envelope
-func Recovery(logger *logging.Logger) gin.HandlerFunc {
+func Recovery(logger *baseLogger.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if err := recover(); err != nil {
@@ -23,7 +23,7 @@ func Recovery(logger *logging.Logger) gin.HandlerFunc {
 				}
 
 				logger.Error("panic recovered",
-					logging.RequestID(requestIDStr),
+					baseLogger.RequestID(requestIDStr),
 					zap.Any("error", err),
 					zap.String("stack", stack),
 					zap.String("path", c.Request.URL.Path),

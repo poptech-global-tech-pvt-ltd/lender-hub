@@ -2,8 +2,7 @@ package circuitbreaker
 
 import "time"
 
-// Config holds circuit breaker configuration
-type Config struct {
+type CircuitBreakerConfig struct {
 	// FailureThreshold: number of consecutive failures to trip to OPEN
 	FailureThreshold int
 	// Timeout: duration to stay OPEN before transitioning to HALF_OPEN
@@ -13,8 +12,8 @@ type Config struct {
 }
 
 // DefaultProfileConfig returns default config for profile operations
-func DefaultProfileConfig() Config {
-	return Config{
+func DefaultProfileConfig() CircuitBreakerConfig {
+	return CircuitBreakerConfig{
 		FailureThreshold: 5,
 		Timeout:          30 * time.Second,
 		HalfOpenRequests: 1,
@@ -22,8 +21,8 @@ func DefaultProfileConfig() Config {
 }
 
 // DefaultPaymentConfig returns default config for payment operations
-func DefaultPaymentConfig() Config {
-	return Config{
+func DefaultPaymentConfig() CircuitBreakerConfig {
+	return CircuitBreakerConfig{
 		FailureThreshold: 10,
 		Timeout:          15 * time.Second,
 		HalfOpenRequests: 1,

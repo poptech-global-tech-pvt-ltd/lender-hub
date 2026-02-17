@@ -10,6 +10,7 @@ import (
 	"lending-hub-service/internal/domain/order/service"
 	"lending-hub-service/internal/domain/order/stub"
 	profileService "lending-hub-service/internal/domain/profile/service"
+	"lending-hub-service/pkg/idgen"
 )
 
 // Module wires together all order module components
@@ -23,22 +24,23 @@ func NewModule(
 	gw port.OrderGateway,
 	profileUpdater *profileService.ProfileUpdater,
 	publisher port.OrderEventPublisher,
+	idgen *idgen.Generator,
 ) *Module {
 	orderRepo := repository.NewOrderRepository(db)
 	mappingRepo := repository.NewPaymentMappingRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	idempotencySvc := service.NewIdempotencyService(idempotencyRepo)
-	svc := service.NewOrderService(orderRepo, mappingRepo, idempotencySvc, gw, profileUpdater, publisher)
+	svc := service.NewOrderService(orderRepo, mappingRepo, idempotencySvc, gw, profileUpdater, publisher, idgen)
 	return &Module{
 		Service: svc,
 	}
 }
 
 // NewModuleWithStubs creates a new order module with stub implementations
-func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater) *Module {
+func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator) *Module {
 	gw := stub.NewStubOrderGateway()
 	publisher := stub.NewStubOrderEventPublisher()
-	return NewModule(db, gw, profileUpdater, publisher)
+	return NewModule(db, gw, profileUpdater, publisher, idgen)
 }
 
 // RegisterRoutes registers order module routes

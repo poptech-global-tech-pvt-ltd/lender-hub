@@ -10,8 +10,8 @@ import (
 	"lending-hub-service/internal/domain/order/entity"
 	"lending-hub-service/internal/domain/order/port"
 	profileService "lending-hub-service/internal/domain/profile/service"
-	"lending-hub-service/internal/shared/idgen"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	"lending-hub-service/pkg/idgen"
 )
 
 // OrderService handles order operations
@@ -22,7 +22,7 @@ type OrderService struct {
 	gateway        port.OrderGateway
 	profileUpdater *profileService.ProfileUpdater
 	publisher      port.OrderEventPublisher
-	idgen          *idgen.IDGenerator
+	idgen          *idgen.Generator
 }
 
 // NewOrderService creates a new OrderService
@@ -33,7 +33,7 @@ func NewOrderService(
 	gateway port.OrderGateway,
 	profileUpdater *profileService.ProfileUpdater,
 	publisher port.OrderEventPublisher,
-	idgen *idgen.IDGenerator,
+	idgen *idgen.Generator,
 ) *OrderService {
 	return &OrderService{
 		orderRepo:      orderRepo,
@@ -97,21 +97,21 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 
 	// Create order entity
 	order := &entity.Order{
-		PaymentID:            paymentID,
-		UserID:               req.UserID,
-		MerchantID:           req.MerchantID,
-		Lender:               "LAZYPAY", // TODO: make configurable
-		Amount:               req.Amount,
-		Currency:             req.Currency,
-		Status:               entity.OrderStatus(gatewayResp.Status),
-		ReturnURL:            &req.ReturnURL,
-		EMIPlan:              emiPlanBytes,
-		LenderOrderID:        gatewayResp.LenderOrderID,
-		LenderMerchantTxnID:  gatewayResp.LenderOrderID, // Use lenderOrderID as merchant txn ID
-		LastErrorCode:        gatewayResp.ErrorCode,
-		LastErrorMessage:     gatewayResp.ErrorMessage,
-		CreatedAt:            time.Now().UTC(),
-		UpdatedAt:            time.Now().UTC(),
+		PaymentID:           paymentID,
+		UserID:              req.UserID,
+		MerchantID:          req.MerchantID,
+		Lender:              "LAZYPAY", // TODO: make configurable
+		Amount:              req.Amount,
+		Currency:            req.Currency,
+		Status:              entity.OrderStatus(gatewayResp.Status),
+		ReturnURL:           &req.ReturnURL,
+		EMIPlan:             emiPlanBytes,
+		LenderOrderID:       gatewayResp.LenderOrderID,
+		LenderMerchantTxnID: gatewayResp.LenderOrderID, // Use lenderOrderID as merchant txn ID
+		LastErrorCode:       gatewayResp.ErrorCode,
+		LastErrorMessage:    gatewayResp.ErrorMessage,
+		CreatedAt:           time.Now().UTC(),
+		UpdatedAt:           time.Now().UTC(),
 	}
 
 	// Persist order
@@ -123,13 +123,13 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	// Create payment mapping
 	if gatewayResp.LenderOrderID != nil {
 		mapping := &entity.PaymentMapping{
-			PaymentID:            paymentID,
-			UserID:               req.UserID,
-			Lender:               order.Lender,
-			LenderMerchantTxnID:  *gatewayResp.LenderOrderID,
-			LenderOrderID:        gatewayResp.LenderOrderID,
-			CreatedAt:            time.Now().UTC(),
-			UpdatedAt:            time.Now().UTC(),
+			PaymentID:           paymentID,
+			UserID:              req.UserID,
+			Lender:              order.Lender,
+			LenderMerchantTxnID: *gatewayResp.LenderOrderID,
+			LenderOrderID:       gatewayResp.LenderOrderID,
+			CreatedAt:           time.Now().UTC(),
+			UpdatedAt:           time.Now().UTC(),
 		}
 		if err := s.mappingRepo.Create(ctx, mapping); err != nil {
 			// Log error but don't fail the request

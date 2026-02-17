@@ -11,7 +11,7 @@ import (
 	"lending-hub-service/internal/domain/onboarding/port"
 	profileService "lending-hub-service/internal/domain/profile/service"
 	sharedErrors "lending-hub-service/internal/shared/errors"
-	"lending-hub-service/internal/shared/idgen"
+	"lending-hub-service/pkg/idgen"
 )
 
 // OnboardingService handles onboarding operations
@@ -21,7 +21,7 @@ type OnboardingService struct {
 	gateway        port.OnboardingGateway
 	profileUpdater *profileService.ProfileUpdater
 	processor      *EventProcessor
-	idgen          *idgen.IDGenerator
+	idgen          *idgen.Generator
 }
 
 // NewOnboardingService creates a new OnboardingService
@@ -30,7 +30,7 @@ func NewOnboardingService(
 	eventStore port.OnboardingEventStore,
 	gateway port.OnboardingGateway,
 	profileUpdater *profileService.ProfileUpdater,
-	idgen *idgen.IDGenerator,
+	idgen *idgen.Generator,
 ) *OnboardingService {
 	return &OnboardingService{
 		repo:           repo,

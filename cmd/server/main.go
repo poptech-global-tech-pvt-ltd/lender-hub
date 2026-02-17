@@ -23,8 +23,10 @@ import (
 	"lending-hub-service/internal/infrastructure/kafka"
 
 	// Infrastructure - Phase 4B (logging + business metrics)
-	"lending-hub-service/internal/infrastructure/observability/logging"
 	"lending-hub-service/internal/infrastructure/observability/metrics"
+	baseLogger "lending-hub-service/pkg/logger"
+	"lending-hub-service/pkg/idgen"
+	baseValidator "lending-hub-service/pkg/validator"
 
 	// Infrastructure - Phase 4C
 	"lending-hub-service/internal/infrastructure/health"
@@ -48,12 +50,26 @@ func main() {
 	// ═══════════════════════════════════════
 	// 2. Initialize logging (Phase 4B)
 	// ═══════════════════════════════════════
-	logger, err := logging.NewLogger("payin3-service", cfg.Env)
+	logger, err := baseLogger.New(baseLogger.Config{
+		Service: "payin3-service",
+		Env:     cfg.Env,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer logger.Sync()
+
+	// ═══════════════════════════════════════
+	// 2.5. Initialize ID generator
+	// ═══════════════════════════════════════
+	idGen := idgen.New()
+
+	// ═══════════════════════════════════════
+	// 2.6. Initialize validator
+	// ═══════════════════════════════════════
+	validator := baseValidator.New()
+	_ = baseValidator.NewHTTPValidator(validator) // Reserved for future handler refactoring
 
 	// ═══════════════════════════════════════
 	// 3. Initialize business metrics (Phase 4B + 4B-FIX)
@@ -66,7 +82,7 @@ func main() {
 		mc, err = metrics.NewDatadogClient(ddCfg)
 		if err != nil {
 			logger.Error("failed to init Datadog, falling back to noop",
-				logging.ErrorCode(err.Error()))
+				baseLogger.ErrorCode(err.Error()))
 			mc = metrics.NewNoopClient()
 		} else {
 			logger.Info("Datadog metrics enabled")
@@ -82,18 +98,18 @@ func main() {
 	// ═══════════════════════════════════════
 	gormDB, err := pg.NewDB(cfg.DB)
 	if err != nil {
-		logger.Fatal("failed to connect database", logging.ErrorCode(err.Error()))
+		logger.Fatal("failed to connect database", baseLogger.ErrorCode(err.Error()))
 	}
 	defer func() {
 		if err := pg.Close(gormDB); err != nil {
-			logger.Error("failed to close database", logging.ErrorCode(err.Error()))
+			logger.Error("failed to close database", baseLogger.ErrorCode(err.Error()))
 		}
 	}()
 
 	// Get underlying sql.DB for health checks
 	sqlDB, err := gormDB.DB()
 	if err != nil {
-		logger.Fatal("failed to get sql.DB", logging.ErrorCode(err.Error()))
+		logger.Fatal("failed to get sql.DB", baseLogger.ErrorCode(err.Error()))
 	}
 
 	// Apply connection pool settings (already done in NewDB, but ensure)
@@ -103,7 +119,7 @@ func main() {
 	sqlDB.SetConnMaxIdleTime(cfg.DB.ConnMaxIdleTime)
 
 	if err := sqlDB.Ping(); err != nil {
-		logger.Fatal("database ping failed", logging.ErrorCode(err.Error()))
+		logger.Fatal("database ping failed", baseLogger.ErrorCode(err.Error()))
 	}
 	logger.Info("database connected")
 
@@ -125,7 +141,7 @@ func main() {
 		redisCache, err := cache.NewRedisProfileCache(redisCfg)
 		if err != nil {
 			logger.Error("failed to init Redis, falling back to memory cache",
-				logging.ErrorCode(err.Error()))
+				baseLogger.ErrorCode(err.Error()))
 			redisClient = nil
 		} else {
 			// Extract underlying redis.Client for health checks
@@ -153,7 +169,7 @@ func main() {
 		kafkaProducer, err := kafka.NewProducer(producerCfg)
 		if err != nil {
 			logger.Error("failed to init Kafka, falling back to noop",
-				logging.ErrorCode(err.Error()))
+				baseLogger.ErrorCode(err.Error()))
 			producer = kafka.NewNoopProducer()
 		} else {
 			producer = kafkaProducer
@@ -194,7 +210,7 @@ func main() {
 
 	// Global middleware stack (order matters)
 	router.Use(
-		middleware.RequestID(),                         // 1. Generate/extract request ID
+		middleware.RequestID(idGen),                    // 1. Generate/extract request ID
 		middleware.Recovery(logger),                    // 2. Panic recovery + structured log
 		middleware.RequestLogging(logger),              // 3. Structured request/response log
 		middleware.ContextHeaders(map[string]bool{      // 4. Extract platform context headers
@@ -231,10 +247,10 @@ func main() {
 
 	go func() {
 		logger.Info("starting server",
-			logging.Endpoint(fmt.Sprintf(":%s", port)),
+			baseLogger.Endpoint(fmt.Sprintf(":%s", port)),
 		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("server failed", logging.ErrorCode(err.Error()))
+			logger.Fatal("server failed", baseLogger.ErrorCode(err.Error()))
 		}
 	}()
 
@@ -248,7 +264,7 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		logger.Fatal("server forced shutdown", logging.ErrorCode(err.Error()))
+		logger.Fatal("server forced shutdown", baseLogger.ErrorCode(err.Error()))
 	}
 
 	logger.Info("server stopped")

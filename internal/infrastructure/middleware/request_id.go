@@ -2,17 +2,18 @@ package middleware
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
+
+	"lending-hub-service/pkg/idgen"
 )
 
 const HeaderRequestID = "X-Request-ID"
 
 // RequestID generates or extracts X-Request-ID for every request
-func RequestID() gin.HandlerFunc {
+func RequestID(idgen *idgen.Generator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestID := c.GetHeader(HeaderRequestID)
 		if requestID == "" {
-			requestID = uuid.New().String()
+			requestID = idgen.RequestID()
 		}
 
 		c.Set("requestId", requestID)

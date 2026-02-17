@@ -6,7 +6,7 @@ import (
 
 	"lending-hub-service/internal/domain/refund/entity"
 	"lending-hub-service/internal/domain/refund/port"
-	"lending-hub-service/internal/infrastructure/observability/logging"
+	baseLogger "lending-hub-service/pkg/logger"
 	"lending-hub-service/internal/infrastructure/observability/metrics"
 )
 
@@ -15,7 +15,7 @@ type RefundEnquiryService struct {
 	gateway    port.RefundGateway
 	repository port.RefundRepository
 	mc         metrics.MetricsClient
-	logger     *logging.Logger
+	logger     *baseLogger.Logger
 	enquirySLA time.Duration
 }
 
@@ -24,7 +24,7 @@ func NewRefundEnquiryService(
 	gateway port.RefundGateway,
 	repository port.RefundRepository,
 	mc metrics.MetricsClient,
-	logger *logging.Logger,
+	logger *baseLogger.Logger,
 	enquirySLA time.Duration,
 ) *RefundEnquiryService {
 	return &RefundEnquiryService{
@@ -39,13 +39,13 @@ func NewRefundEnquiryService(
 // ResolveRefundState calls enquiry API and updates refund based on response
 func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *entity.Refund) error {
 	s.logger.Info("resolving refund via enquiry",
-		logging.RefundID(refund.RefundID),
-		logging.Status(string(refund.Status)),
+		baseLogger.RefundID(refund.RefundID),
+		baseLogger.Status(string(refund.Status)),
 	)
 
 	if refund.ProviderMerchantTxnID == nil || *refund.ProviderMerchantTxnID == "" {
 		s.logger.Warn("cannot resolve refund: missing provider_merchant_txn_id",
-			logging.RefundID(refund.RefundID),
+			baseLogger.RefundID(refund.RefundID),
 		)
 		return nil
 	}
@@ -54,8 +54,8 @@ func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *e
 	resp, err := s.gateway.EnquireRefund(ctx, *refund.ProviderMerchantTxnID)
 	if err != nil {
 		s.logger.Error("enquiry API failed",
-			logging.RefundID(refund.RefundID),
-			logging.ErrorCode(err.Error()),
+			baseLogger.RefundID(refund.RefundID),
+			baseLogger.ErrorCode(err.Error()),
 		)
 		return err
 	}
@@ -79,7 +79,7 @@ func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *e
 			refund.MarkFailed("REFUND_NOT_FOUND_IN_ENQUIRY",
 				"Refund not visible at lender after SLA")
 			s.logger.Warn("refund not found after SLA, marking FAILED",
-				logging.RefundID(refund.RefundID),
+				baseLogger.RefundID(refund.RefundID),
 			)
 		} else {
 			// Still within SLA, keep current state (or mark UNKNOWN if PENDING)
@@ -87,7 +87,7 @@ func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *e
 				refund.MarkUnknown("Refund not yet visible in enquiry")
 			}
 			s.logger.Info("refund not found in enquiry, within SLA",
-				logging.RefundID(refund.RefundID),
+				baseLogger.RefundID(refund.RefundID),
 			)
 		}
 	} else {
@@ -99,23 +99,23 @@ func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *e
 				"provider:" + refund.Lender,
 			})
 			s.logger.Info("refund resolved as SUCCESS via enquiry",
-				logging.RefundID(refund.RefundID),
+				baseLogger.RefundID(refund.RefundID),
 			)
 		case "FAILED":
 			refund.MarkFailed(refundTxn.Status, refundTxn.RespMessage)
 			s.logger.Info("refund resolved as FAILED via enquiry",
-				logging.RefundID(refund.RefundID),
+				baseLogger.RefundID(refund.RefundID),
 			)
 		case "PROCESSING":
 			refund.MarkProcessing(refundTxn.RespMessage)
 			s.logger.Info("refund still PROCESSING per enquiry",
-				logging.RefundID(refund.RefundID),
+				baseLogger.RefundID(refund.RefundID),
 			)
 		default:
 			refund.MarkFailed(refundTxn.Status, refundTxn.RespMessage)
 			s.logger.Warn("unknown enquiry status, marking FAILED",
-				logging.RefundID(refund.RefundID),
-				logging.Status(refundTxn.Status),
+				baseLogger.RefundID(refund.RefundID),
+				baseLogger.Status(refundTxn.Status),
 			)
 		}
 	}
@@ -123,8 +123,8 @@ func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *e
 	// Persist updated state
 	if err := s.repository.Update(ctx, refund); err != nil {
 		s.logger.Error("failed to update refund after enquiry",
-			logging.RefundID(refund.RefundID),
-			logging.ErrorCode(err.Error()),
+			baseLogger.RefundID(refund.RefundID),
+			baseLogger.ErrorCode(err.Error()),
 		)
 		return err
 	}

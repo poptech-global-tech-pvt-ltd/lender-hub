@@ -25,20 +25,20 @@ var (
 
 // CircuitBreaker implements a circuit breaker pattern
 type CircuitBreaker struct {
-	mu              sync.Mutex
-	config          Config
-	state           State
-	failureCount    int
-	successCount    int // for half-open tracking
-	lastFailureTime time.Time
+	mu               sync.Mutex
+	config           CircuitBreakerConfig
+	state            State
+	failureCount     int
+	successCount     int // for half-open tracking
+	lastFailureTime  time.Time
 	halfOpenAttempts int
 }
 
 // New creates a new circuit breaker with the given config
-func New(cfg Config) *CircuitBreaker {
+func New(cfg CircuitBreakerConfig) *CircuitBreaker {
 	return &CircuitBreaker{
-		config:          cfg,
-		state:           StateClosed,
+		config:           cfg,
+		state:            StateClosed,
 		halfOpenAttempts: 0,
 	}
 }

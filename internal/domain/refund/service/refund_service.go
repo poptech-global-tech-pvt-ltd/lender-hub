@@ -4,14 +4,13 @@ import (
 	"context"
 	"time"
 
+	orderEntity "lending-hub-service/internal/domain/order/entity"
+	orderPort "lending-hub-service/internal/domain/order/port"
+	profileService "lending-hub-service/internal/domain/profile/service"
 	req "lending-hub-service/internal/domain/refund/dto/request"
 	res "lending-hub-service/internal/domain/refund/dto/response"
 	"lending-hub-service/internal/domain/refund/entity"
 	"lending-hub-service/internal/domain/refund/port"
-	orderEntity "lending-hub-service/internal/domain/order/entity"
-	orderPort "lending-hub-service/internal/domain/order/port"
-	profileService "lending-hub-service/internal/domain/profile/service"
-	"lending-hub-service/internal/shared/idgen"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 )
 
@@ -131,21 +130,21 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 				}
 
 				refund := &entity.Refund{
-					RefundID:           req.RefundID,
-					PaymentID:          req.PaymentID,
-					UserID:             order.UserID,
-					Lender:             order.Lender,
-					Amount:             req.Amount,
-					Currency:           req.Currency,
-					Status:             refundStatus,
-					Reason:             reason,
-					ProviderRefundRefID: req.RefundID,
+					RefundID:              req.RefundID,
+					PaymentID:             req.PaymentID,
+					UserID:                order.UserID,
+					Lender:                order.Lender,
+					Amount:                req.Amount,
+					Currency:              req.Currency,
+					Status:                refundStatus,
+					Reason:                reason,
+					ProviderRefundRefID:   req.RefundID,
 					ProviderMerchantTxnID: &req.PaymentID,
-					ProviderRefundTxnID:  &refundTxn.LpTxnID,
-					LenderStatus:        &refundTxn.Status,
-					LenderMessage:       &refundTxn.RespMessage,
-					CreatedAt:           time.Now().UTC(),
-					UpdatedAt:           time.Now().UTC(),
+					ProviderRefundTxnID:   &refundTxn.LpTxnID,
+					LenderStatus:          &refundTxn.Status,
+					LenderMessage:         &refundTxn.RespMessage,
+					CreatedAt:             time.Now().UTC(),
+					UpdatedAt:             time.Now().UTC(),
 				}
 
 				// Persist refund
@@ -177,20 +176,20 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 	// Create refund entity
 	merchantTxnID := req.PaymentID
 	refund := &entity.Refund{
-		RefundID:            req.RefundID,
-		PaymentID:           req.PaymentID,
-		UserID:              order.UserID,
-		Lender:              order.Lender,
-		Amount:              req.Amount,
-		Currency:            req.Currency,
-		Status:              entity.RefundStatus(gatewayResp.Status),
-		Reason:              reason,
-		ProviderRefundRefID: req.RefundID, // idempotency key
+		RefundID:              req.RefundID,
+		PaymentID:             req.PaymentID,
+		UserID:                order.UserID,
+		Lender:                order.Lender,
+		Amount:                req.Amount,
+		Currency:              req.Currency,
+		Status:                entity.RefundStatus(gatewayResp.Status),
+		Reason:                reason,
+		ProviderRefundRefID:   req.RefundID, // idempotency key
 		ProviderMerchantTxnID: &merchantTxnID,
-		LenderRefID:         gatewayResp.LenderRefID,
-		LenderStatus:         &gatewayResp.Status,
-		CreatedAt:            time.Now().UTC(),
-		UpdatedAt:            time.Now().UTC(),
+		LenderRefID:           gatewayResp.LenderRefID,
+		LenderStatus:          &gatewayResp.Status,
+		CreatedAt:             time.Now().UTC(),
+		UpdatedAt:             time.Now().UTC(),
 	}
 
 	// Persist refund

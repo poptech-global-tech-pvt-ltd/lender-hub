@@ -2,7 +2,8 @@ package middleware
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
+
+	"lending-hub-service/pkg/idgen"
 )
 
 const (
@@ -13,14 +14,14 @@ const (
 )
 
 // RequestID injects or preserves request ID for tracing
-func RequestID() gin.HandlerFunc {
+func RequestID(idgen *idgen.Generator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Check if request already has ID
 		requestID := c.Request.Header.Get(RequestIDHeader)
 
 		// Generate new ID if missing
 		if requestID == "" {
-			requestID = uuid.NewString()
+			requestID = idgen.RequestID()
 		}
 
 		// Store in context for handlers
