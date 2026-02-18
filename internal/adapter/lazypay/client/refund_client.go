@@ -16,6 +16,7 @@ import (
 	refundResp "lending-hub-service/internal/domain/refund/dto/response"
 	refundPort "lending-hub-service/internal/domain/refund/port"
 	"lending-hub-service/internal/infrastructure/http/executor"
+	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 )
 
@@ -41,6 +42,9 @@ func NewRefundClient(
 
 // ProcessRefund implements RefundGateway.ProcessRefund
 func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRefundRequest) (*refundResp.RefundResponse, error) {
+	// Extract RequestContext
+	rc := sharedContext.FromContext(ctx)
+
 	// Sign request (using paymentId as merchantTxnId)
 	sig := c.signer.SignOrder(req.PaymentID, req.Amount) // Reuse order signature format
 
@@ -58,9 +62,11 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRe
 		Method: http.MethodPost,
 		URL:    c.config.BaseURL + lpConstants.PathRefund,
 		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderSignature:   sig,
-			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+			lpConstants.HeaderAccessKey:     c.config.AccessKey,
+			lpConstants.HeaderSignature:     sig,
+			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
+			lpConstants.HeaderPlatform:      rc.Platform,
+			lpConstants.HeaderUserIPAddress: rc.UserIP,
 		},
 		Body: bytes.NewReader(jsonBody),
 	}
@@ -88,6 +94,9 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRe
 
 // EnquireRefund implements RefundGateway.EnquireRefund
 func (c *RefundClient) EnquireRefund(ctx context.Context, merchantTxnID string) (*refundPort.EnquiryResponse, error) {
+	// Extract RequestContext
+	rc := sharedContext.FromContext(ctx)
+
 	// Generate signature for enquiry
 	sig := c.signer.SignEnquiry(merchantTxnID)
 
@@ -99,9 +108,11 @@ func (c *RefundClient) EnquireRefund(ctx context.Context, merchantTxnID string) 
 		Method: http.MethodGet,
 		URL:    url,
 		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderSignature:   sig,
-			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+			lpConstants.HeaderAccessKey:     c.config.AccessKey,
+			lpConstants.HeaderSignature:     sig,
+			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
+			lpConstants.HeaderPlatform:      rc.Platform,
+			lpConstants.HeaderUserIPAddress: rc.UserIP,
 		},
 		Body: nil,
 	}

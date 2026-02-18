@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"net/http"
 
-	orderReq "lending-hub-service/internal/domain/order/dto/request"
-	orderResp "lending-hub-service/internal/domain/order/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/config"
 	lpConstants "lending-hub-service/internal/adapter/lazypay/constants"
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
+	orderReq "lending-hub-service/internal/domain/order/dto/request"
+	orderResp "lending-hub-service/internal/domain/order/dto/response"
 	"lending-hub-service/internal/infrastructure/http/executor"
+	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 )
 
@@ -40,6 +41,9 @@ func NewPaymentClient(
 
 // CreateOrder implements OrderGateway.CreateOrder
 func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrderRequest) (*orderResp.OrderResponse, error) {
+	// Extract RequestContext
+	rc := sharedContext.FromContext(ctx)
+
 	// Sign request
 	sig := c.signer.SignOrder(req.PaymentID, req.Amount)
 
@@ -57,9 +61,11 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrde
 		Method: http.MethodPost,
 		URL:    c.config.BaseURL + lpConstants.PathCreateOrder,
 		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderSignature:  sig,
-			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+			lpConstants.HeaderAccessKey:     c.config.AccessKey,
+			lpConstants.HeaderSignature:     sig,
+			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
+			lpConstants.HeaderPlatform:      rc.Platform,
+			lpConstants.HeaderUserIPAddress: rc.UserIP,
 		},
 		Body: bytes.NewReader(jsonBody),
 	}
@@ -67,7 +73,7 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrde
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
-		return nil, fmt.Errorf("executor error: %w", err)
+		return nil, fmt.Errorf("HTTP executor error: %w", err)
 	}
 
 	// Check for HTTP errors
@@ -87,16 +93,25 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrde
 
 // GetOrderStatus implements OrderGateway.GetOrderStatus
 func (c *PaymentClient) GetOrderStatus(ctx context.Context, paymentID string) (*orderResp.OrderStatusResponse, error) {
+	// Extract RequestContext
+	rc := sharedContext.FromContext(ctx)
+
 	// Build URL with query params
 	url := fmt.Sprintf("%s%s?merchantTxnId=%s", c.config.BaseURL, lpConstants.PathOrderEnquiry, paymentID)
+
+	// Sign request for enquiry
+	sig := c.signer.SignEnquiry(paymentID)
 
 	// Build executor request
 	execReq := executor.Request{
 		Method: http.MethodGet,
 		URL:    url,
 		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+			lpConstants.HeaderAccessKey:     c.config.AccessKey,
+			lpConstants.HeaderSignature:     sig,
+			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
+			lpConstants.HeaderPlatform:      rc.Platform,
+			lpConstants.HeaderUserIPAddress: rc.UserIP,
 		},
 		Body: nil,
 	}

@@ -10,7 +10,6 @@ import (
 
 const (
 	HeaderPlatform = "x-platform"
-	HeaderDeviceID = "x-device-id"
 	HeaderUserIP   = "x-user-ip"
 )
 
@@ -24,16 +23,24 @@ func ContextHeaders(skipPaths map[string]bool) gin.HandlerFunc {
 		}
 
 		platform := c.GetHeader(HeaderPlatform)
-		deviceID := c.GetHeader(HeaderDeviceID)
 		userIP := c.GetHeader(HeaderUserIP)
+		deviceID := c.GetHeader("x-device-id") // Optional, not validated
 
+		missing := make([]string, 0, 2)
 		if platform == "" {
+			missing = append(missing, "x-platform")
+		}
+		if userIP == "" {
+			missing = append(missing, "x-user-ip")
+		}
+
+		if len(missing) > 0 {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"success": false,
 				"data":    nil,
 				"error": gin.H{
 					"code":       "PAYIN3_INVALID_CONTEXT",
-					"message":    "Missing required header: x-platform",
+					"message":    "Missing required context headers: " + joinMissing(missing),
 					"statusCode": 400,
 					"retryable":  false,
 				},
@@ -49,7 +56,7 @@ func ContextHeaders(skipPaths map[string]bool) gin.HandlerFunc {
 		rc := &reqctx.RequestContext{
 			RequestID: requestIDStr,
 			Platform:  platform,
-			DeviceID:  deviceID,
+			DeviceID:  deviceID, // Optional, may be empty
 			UserIP:    userIP,
 		}
 
@@ -60,4 +67,20 @@ func ContextHeaders(skipPaths map[string]bool) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// joinMissing is a simple helper to join missing header names.
+func joinMissing(headers []string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	if len(headers) == 1 {
+		return headers[0]
+	}
+	// simple comma+space join
+	out := headers[0]
+	for i := 1; i < len(headers); i++ {
+		out += ", " + headers[i]
+	}
+	return out
 }

@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"net/http"
 
-	profileReq "lending-hub-service/internal/domain/profile/dto/request"
-	profileResp "lending-hub-service/internal/domain/profile/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/config"
 	lpConstants "lending-hub-service/internal/adapter/lazypay/constants"
 	"lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
+	profileReq "lending-hub-service/internal/domain/profile/dto/request"
+	profileResp "lending-hub-service/internal/domain/profile/dto/response"
 	"lending-hub-service/internal/infrastructure/http/executor"
+	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 )
 
@@ -40,6 +41,9 @@ func NewProfileClient(
 
 // CheckEligibility implements ProfileGateway.CheckEligibility
 func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.CustomerStatusRequest) (*profileResp.CustomerStatusResponse, error) {
+	// Extract RequestContext
+	rc := sharedContext.FromContext(ctx)
+
 	// Sign request
 	sig := c.signer.SignEligibility(req.Mobile, req.Email, 0) // amount 0 for discovery
 
@@ -57,9 +61,11 @@ func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.Cus
 		Method: http.MethodPost,
 		URL:    c.config.BaseURL + lpConstants.PathEligibility,
 		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderSignature:  sig,
-			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+			lpConstants.HeaderAccessKey:     c.config.AccessKey,
+			lpConstants.HeaderSignature:     sig,
+			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
+			lpConstants.HeaderPlatform:      rc.Platform,
+			lpConstants.HeaderUserIPAddress: rc.UserIP,
 		},
 		Body: bytes.NewReader(jsonBody),
 	}
@@ -87,6 +93,9 @@ func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.Cus
 
 // GetCustomerStatus implements ProfileGateway.GetCustomerStatus
 func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile string) (*profileResp.CustomerStatusResponse, error) {
+	// Extract RequestContext
+	rc := sharedContext.FromContext(ctx)
+
 	// Sign request
 	sig := c.signer.SignCustomerStatus(mobile)
 
@@ -98,9 +107,11 @@ func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile string) (*
 		Method: http.MethodGet,
 		URL:    url,
 		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderSignature:  sig,
-			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+			lpConstants.HeaderAccessKey:     c.config.AccessKey,
+			lpConstants.HeaderSignature:     sig,
+			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
+			lpConstants.HeaderPlatform:      rc.Platform,
+			lpConstants.HeaderUserIPAddress: rc.UserIP,
 		},
 		Body: nil,
 	}
@@ -136,6 +147,5 @@ func (c *ProfileClient) handleErrorResponse(body []byte) (*profileResp.CustomerS
 	if err := json.Unmarshal(body, &lpError); err == nil && lpError.ErrorCode != "" {
 		return nil, mapper.MapLPError(lpError.ErrorCode)
 	}
-	// Fallback to generic error
 	return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "provider error")
 }

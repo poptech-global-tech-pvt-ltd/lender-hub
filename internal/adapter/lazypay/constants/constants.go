@@ -31,9 +31,15 @@ const (
 
 // HTTP headers
 const (
-	HeaderAccessKey   = "X-Access-Key"
-	HeaderSignature   = "X-Signature"
-	HeaderContentType = "Content-Type"
-	HeaderWebhookSig  = "X-Webhook-Signature"
-	ContentTypeJSON   = "application/json"
+	// Core Lazypay headers (all required)
+	HeaderAccessKey     = "accessKey"
+	HeaderSignature     = "signature"
+	HeaderContentType   = "Content-Type"
+	HeaderPlatform      = "platform"
+	HeaderUserIPAddress = "userIpAddress"
+
+	// Webhook or internal headers (if used)
+	HeaderWebhookSignature = "X-Webhook-Signature"
+
+	ContentTypeJSON = "application/json"
 )

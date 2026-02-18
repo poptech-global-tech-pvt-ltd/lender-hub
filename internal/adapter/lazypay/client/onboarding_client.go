@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"net/http"
 
-	onbReq "lending-hub-service/internal/domain/onboarding/dto/request"
-	onbResp "lending-hub-service/internal/domain/onboarding/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/config"
 	lpConstants "lending-hub-service/internal/adapter/lazypay/constants"
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
+	onbReq "lending-hub-service/internal/domain/onboarding/dto/request"
+	onbResp "lending-hub-service/internal/domain/onboarding/dto/response"
 	"lending-hub-service/internal/infrastructure/http/executor"
+	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 )
 
@@ -40,6 +41,9 @@ func NewOnboardingClient(
 
 // StartOnboarding implements OnboardingGateway.StartOnboarding
 func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.StartOnboardingRequest) (*onbResp.OnboardingResponse, error) {
+	// Extract RequestContext
+	rc := sharedContext.FromContext(ctx)
+
 	// Map to LP request
 	lpReq := mapper.ToLPOnboardingRequest(req, c.config.AccessKey, c.config.MerchantID)
 
@@ -54,8 +58,10 @@ func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.Start
 		Method: http.MethodPost,
 		URL:    c.config.BaseURL + lpConstants.PathCreateOnboarding,
 		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+			lpConstants.HeaderAccessKey:     c.config.AccessKey,
+			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
+			lpConstants.HeaderPlatform:      rc.Platform,
+			lpConstants.HeaderUserIPAddress: rc.UserIP,
 		},
 		Body: bytes.NewReader(jsonBody),
 	}
@@ -83,6 +89,9 @@ func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.Start
 
 // GetOnboardingStatus implements OnboardingGateway.GetOnboardingStatus
 func (c *OnboardingClient) GetOnboardingStatus(ctx context.Context, mobile string) (*onbResp.OnboardingStatusResponse, error) {
+	// Extract RequestContext
+	rc := sharedContext.FromContext(ctx)
+
 	// Build URL with query params
 	url := fmt.Sprintf("%s%s?mobile=%s", c.config.BaseURL, lpConstants.PathOnboardingStatus, mobile)
 
@@ -91,8 +100,10 @@ func (c *OnboardingClient) GetOnboardingStatus(ctx context.Context, mobile strin
 		Method: http.MethodGet,
 		URL:    url,
 		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:   c.config.AccessKey,
-			lpConstants.HeaderContentType: lpConstants.ContentTypeJSON,
+			lpConstants.HeaderAccessKey:     c.config.AccessKey,
+			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
+			lpConstants.HeaderPlatform:      rc.Platform,
+			lpConstants.HeaderUserIPAddress: rc.UserIP,
 		},
 		Body: nil,
 	}
