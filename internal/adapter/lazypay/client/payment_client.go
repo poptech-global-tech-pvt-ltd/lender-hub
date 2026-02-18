@@ -17,6 +17,7 @@ import (
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // PaymentClient implements OrderGateway for Lazypay
@@ -24,6 +25,7 @@ type PaymentClient struct {
 	config   *config.LazypayConfig
 	signer   *signature.SignatureService
 	executor executor.HttpExecutor
+	logger   *baseLogger.Logger
 }
 
 // NewPaymentClient creates a new PaymentClient
@@ -31,11 +33,13 @@ func NewPaymentClient(
 	cfg *config.LazypayConfig,
 	signer *signature.SignatureService,
 	exec executor.HttpExecutor,
+	logger *baseLogger.Logger,
 ) *PaymentClient {
 	return &PaymentClient{
 		config:   cfg,
 		signer:   signer,
 		executor: exec,
+		logger:   logger,
 	}
 }
 
@@ -47,8 +51,8 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrde
 	// Sign request
 	sig := c.signer.SignOrder(req.PaymentID, req.Amount)
 
-	// Map to LP request
-	lpReq := mapper.ToLPCreateOrderRequest(req, c.config.AccessKey, c.config.MerchantID, sig)
+	// Map to LP request (use GetMerchantID() which falls back to SubMerchantID)
+	lpReq := mapper.ToLPCreateOrderRequest(req, c.config.AccessKey, c.config.GetMerchantID(), sig)
 
 	// Marshal to JSON
 	jsonBody, err := json.Marshal(lpReq)
@@ -70,11 +74,18 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrde
 		Body: bytes.NewReader(jsonBody),
 	}
 
+	// Log request
+	logLazypayRequest(c.logger, ctx, execReq.Method, execReq.URL, execReq.Headers, jsonBody)
+
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
+		logLazypayResponse(c.logger, ctx, execReq.URL, 0, nil, fmt.Errorf("HTTP executor error: %w", err))
 		return nil, fmt.Errorf("HTTP executor error: %w", err)
 	}
+
+	// Log response
+	logLazypayResponse(c.logger, ctx, execReq.URL, resp.StatusCode, resp.Body, nil)
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
@@ -116,11 +127,18 @@ func (c *PaymentClient) GetOrderStatus(ctx context.Context, paymentID string) (*
 		Body: nil,
 	}
 
+	// Log request
+	logLazypayRequest(c.logger, ctx, execReq.Method, execReq.URL, execReq.Headers, nil)
+
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
+		logLazypayResponse(c.logger, ctx, execReq.URL, 0, nil, fmt.Errorf("executor error: %w", err))
 		return nil, fmt.Errorf("executor error: %w", err)
 	}
+
+	// Log response
+	logLazypayResponse(c.logger, ctx, execReq.URL, resp.StatusCode, resp.Body, nil)
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {

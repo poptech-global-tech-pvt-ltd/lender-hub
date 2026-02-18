@@ -18,6 +18,7 @@ import (
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // RefundClient implements RefundGateway for Lazypay
@@ -25,6 +26,7 @@ type RefundClient struct {
 	config   *config.LazypayConfig
 	signer   *signature.SignatureService
 	executor executor.HttpExecutor
+	logger   *baseLogger.Logger
 }
 
 // NewRefundClient creates a new RefundClient
@@ -32,11 +34,13 @@ func NewRefundClient(
 	cfg *config.LazypayConfig,
 	signer *signature.SignatureService,
 	exec executor.HttpExecutor,
+	logger *baseLogger.Logger,
 ) *RefundClient {
 	return &RefundClient{
 		config:   cfg,
 		signer:   signer,
 		executor: exec,
+		logger:   logger,
 	}
 }
 
@@ -49,7 +53,8 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRe
 	sig := c.signer.SignOrder(req.PaymentID, req.Amount) // Reuse order signature format
 
 	// Map to LP request
-	lpReq := mapper.ToLPRefundRequest(req, req.PaymentID, c.config.AccessKey, c.config.MerchantID, sig)
+	// Use GetMerchantID() which falls back to SubMerchantID
+	lpReq := mapper.ToLPRefundRequest(req, req.PaymentID, c.config.AccessKey, c.config.GetMerchantID(), sig)
 
 	// Marshal to JSON
 	jsonBody, err := json.Marshal(lpReq)
@@ -71,11 +76,18 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRe
 		Body: bytes.NewReader(jsonBody),
 	}
 
+	// Log request
+	logLazypayRequest(c.logger, ctx, execReq.Method, execReq.URL, execReq.Headers, jsonBody)
+
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
+		logLazypayResponse(c.logger, ctx, execReq.URL, 0, nil, fmt.Errorf("executor error: %w", err))
 		return nil, fmt.Errorf("executor error: %w", err)
 	}
+
+	// Log response
+	logLazypayResponse(c.logger, ctx, execReq.URL, resp.StatusCode, resp.Body, nil)
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
@@ -117,11 +129,18 @@ func (c *RefundClient) EnquireRefund(ctx context.Context, merchantTxnID string) 
 		Body: nil,
 	}
 
+	// Log request
+	logLazypayRequest(c.logger, ctx, execReq.Method, execReq.URL, execReq.Headers, nil)
+
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
+		logLazypayResponse(c.logger, ctx, execReq.URL, 0, nil, fmt.Errorf("executor error: %w", err))
 		return nil, fmt.Errorf("executor error: %w", err)
 	}
+
+	// Log response
+	logLazypayResponse(c.logger, ctx, execReq.URL, resp.StatusCode, resp.Body, nil)
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {

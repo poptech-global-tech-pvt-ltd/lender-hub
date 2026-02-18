@@ -24,13 +24,32 @@ import (
 
 	// Infrastructure - Phase 4B (logging + business metrics)
 	"lending-hub-service/internal/infrastructure/observability/metrics"
-	baseLogger "lending-hub-service/pkg/logger"
 	"lending-hub-service/pkg/idgen"
+	baseLogger "lending-hub-service/pkg/logger"
 	baseValidator "lending-hub-service/pkg/validator"
 
 	// Infrastructure - Phase 4C
 	"lending-hub-service/internal/infrastructure/health"
 	"lending-hub-service/internal/infrastructure/middleware"
+
+	// Domain modules
+	"lending-hub-service/internal/domain/onboarding"
+	onboardingPort "lending-hub-service/internal/domain/onboarding/port"
+	onboardingStub "lending-hub-service/internal/domain/onboarding/stub"
+	"lending-hub-service/internal/domain/order"
+	orderPort "lending-hub-service/internal/domain/order/port"
+	orderRepo "lending-hub-service/internal/domain/order/repository"
+	orderStub "lending-hub-service/internal/domain/order/stub"
+	"lending-hub-service/internal/domain/profile"
+	profilePort "lending-hub-service/internal/domain/profile/port"
+	profileStub "lending-hub-service/internal/domain/profile/stub"
+	"lending-hub-service/internal/domain/refund"
+	refundPort "lending-hub-service/internal/domain/refund/port"
+	refundStub "lending-hub-service/internal/domain/refund/stub"
+
+	// Adapters
+	"lending-hub-service/internal/adapter/lazypay"
+	lpConfig "lending-hub-service/internal/adapter/lazypay/config"
 )
 
 func main() {
@@ -127,6 +146,7 @@ func main() {
 	// 5. Initialize Redis cache (Phase 4A)
 	// ═══════════════════════════════════════
 	var redisClient *redis.Client
+	var profileCache profilePort.ProfileCache
 	if cfg.Redis.Addr != "" {
 		redisCfg := cache.RedisConfig{
 			Address:      cfg.Redis.Addr,
@@ -142,13 +162,16 @@ func main() {
 		if err != nil {
 			logger.Error("failed to init Redis, falling back to memory cache",
 				baseLogger.ErrorCode(err.Error()))
+			profileCache = cache.NewMemoryProfileCache(60 * time.Second) // 60s TTL
 			redisClient = nil
 		} else {
 			// Extract underlying redis.Client for health checks
 			redisClient = redisCache.Client()
+			profileCache = redisCache
 			logger.Info("Using Redis cache")
 		}
 	} else {
+		profileCache = cache.NewMemoryProfileCache(60 * time.Second) // 60s TTL
 		logger.Info("Using memory cache (no Redis config)")
 	}
 
@@ -181,18 +204,60 @@ func main() {
 	}
 	defer producer.Close()
 
-	// ═══════════════════════════════════════
-	// 7. Lazypay adapter (placeholder — wired in Phase 5)
-	// ═══════════════════════════════════════
-	// lazypayClient := lazypay.NewClient(cfg.Lazypay, profileExecutor, paymentExecutor)
+	// Create event publishers for modules
+	profileEventPublisher := kafka.NewProfileEventPublisher(producer)
+	orderEventPublisher := kafka.NewOrderEventPublisher(producer)
 
 	// ═══════════════════════════════════════
-	// 8. Domain modules (placeholder — wired in Phase 6+)
+	// 7. Lazypay adapter (Phase 3C)
 	// ═══════════════════════════════════════
-	// profileModule := profile.NewModule(gormDB, profileGateway, profileCache, mc, logger)
-	// onboardingModule := onboarding.NewModule(gormDB, onboardingGateway, eventStore, mc, logger)
-	// orderModule := order.NewModule(gormDB, orderGateway, producer, mc, logger)
-	// refundModule := refund.NewModule(gormDB, refundGateway, mc, logger)
+	var profileGateway profilePort.ProfileGateway
+	var onboardingGateway onboardingPort.OnboardingGateway
+	var orderGateway orderPort.OrderGateway
+	var refundGateway refundPort.RefundGateway
+
+	if cfg.Lazypay.Enabled {
+		// Convert config.Config.Lazypay to adapter config
+		lpCfg := &lpConfig.LazypayConfig{
+			BaseURL:        cfg.Lazypay.BaseURL,
+			AccessKey:      cfg.Lazypay.AccessKey,
+			SecretKey:      cfg.Lazypay.SecretKey,
+			MerchantID:     cfg.Lazypay.MerchantID,
+			SubMerchantID:  cfg.Lazypay.SubMerchantID,
+			ProfileTimeout: int(cfg.Lazypay.ProfileTimeout.Seconds()),
+			PaymentTimeout: int(cfg.Lazypay.PaymentTimeout.Seconds()),
+		}
+		lazypayClient := lazypay.NewAdapter(lpCfg, logger)
+		profileGateway = lazypayClient.ProfileGateway()
+		onboardingGateway = lazypayClient.OnboardingGateway()
+		orderGateway = lazypayClient.OrderGateway()
+		refundGateway = lazypayClient.RefundGateway()
+		logger.Info("Using Lazypay adapter")
+	} else {
+		// Use stubs
+		profileGateway = profileStub.NewStubProfileGateway()
+		onboardingGateway = onboardingStub.NewStubOnboardingGateway()
+		orderGateway = orderStub.NewStubOrderGateway()
+		refundGateway = refundStub.NewStubRefundGateway()
+		logger.Info("Using stub gateways (Lazypay disabled)")
+	}
+
+	// ═══════════════════════════════════════
+	// 8. Domain modules
+	// ═══════════════════════════════════════
+	// Profile module
+	profileModule := profile.NewModule(gormDB, profileGateway, profileCache, profileEventPublisher)
+	profileUpdater := profileModule.Updater
+
+	// Onboarding module
+	onboardingModule := onboarding.NewModule(gormDB, onboardingGateway, profileUpdater, idGen)
+
+	// Order module
+	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen)
+
+	// Refund module
+	orderRepo := orderRepo.NewOrderRepository(gormDB)
+	refundModule := refund.NewModule(gormDB, refundGateway, orderRepo, profileUpdater)
 
 	// ═══════════════════════════════════════
 	// 9. Setup Gin router + middleware
@@ -210,10 +275,10 @@ func main() {
 
 	// Global middleware stack (order matters)
 	router.Use(
-		middleware.RequestID(idGen),                    // 1. Generate/extract request ID
-		middleware.Recovery(logger),                    // 2. Panic recovery + structured log
-		middleware.RequestLogging(logger),              // 3. Structured request/response log
-		middleware.ContextHeaders(map[string]bool{      // 4. Extract platform context headers
+		middleware.RequestID(idGen),       // 1. Generate/extract request ID
+		middleware.Recovery(logger),       // 2. Panic recovery + structured log
+		middleware.RequestLogging(logger), // 3. Structured request/response log
+		middleware.ContextHeaders(map[string]bool{ // 4. Extract platform context headers
 			"/health":       true,
 			"/health/ready": true,
 		}),
@@ -222,12 +287,10 @@ func main() {
 	// API route group
 	v1 := router.Group("/v1/payin3")
 	{
-		// Module routes registered here in Phase 6+:
-		// profileModule.RegisterRoutes(v1)
-		// onboardingModule.RegisterRoutes(v1)
-		// orderModule.RegisterRoutes(v1)
-		// refundModule.RegisterRoutes(v1)
-		_ = v1
+		profileModule.RegisterRoutes(v1)
+		onboardingModule.RegisterRoutes(v1)
+		orderModule.RegisterRoutes(v1)
+		refundModule.RegisterRoutes(v1)
 	}
 
 	// ═══════════════════════════════════════
@@ -247,7 +310,7 @@ func main() {
 
 	go func() {
 		logger.Info("starting server",
-			baseLogger.Endpoint(fmt.Sprintf(":%s", port)),
+			baseLogger.Module("server"),
 		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("server failed", baseLogger.ErrorCode(err.Error()))

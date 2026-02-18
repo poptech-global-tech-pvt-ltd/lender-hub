@@ -17,6 +17,7 @@ import (
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // OnboardingClient implements OnboardingGateway for Lazypay
@@ -24,6 +25,7 @@ type OnboardingClient struct {
 	config   *config.LazypayConfig
 	signer   *signature.SignatureService
 	executor executor.HttpExecutor
+	logger   *baseLogger.Logger
 }
 
 // NewOnboardingClient creates a new OnboardingClient
@@ -31,11 +33,13 @@ func NewOnboardingClient(
 	cfg *config.LazypayConfig,
 	signer *signature.SignatureService,
 	exec executor.HttpExecutor,
+	logger *baseLogger.Logger,
 ) *OnboardingClient {
 	return &OnboardingClient{
 		config:   cfg,
 		signer:   signer,
 		executor: exec,
+		logger:   logger,
 	}
 }
 
@@ -44,8 +48,17 @@ func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.Start
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
-	// Map to LP request
-	lpReq := mapper.ToLPOnboardingRequest(req, c.config.AccessKey, c.config.MerchantID)
+	// Map to LP request - only set MerchantID if we have one, otherwise use subMerchantId
+	merchantID := c.config.GetMerchantID()
+	lpReq := mapper.ToLPOnboardingRequest(req, c.config.AccessKey, merchantID)
+	// Always set SubMerchantID if provided (preferred over merchantId)
+	if c.config.SubMerchantID != "" {
+		lpReq.SubMerchantID = c.config.SubMerchantID
+		// If we only have subMerchantId, don't send merchantId
+		if c.config.MerchantID == "" {
+			lpReq.MerchantID = ""
+		}
+	}
 
 	// Marshal to JSON
 	jsonBody, err := json.Marshal(lpReq)
@@ -66,11 +79,18 @@ func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.Start
 		Body: bytes.NewReader(jsonBody),
 	}
 
+	// Log request
+	logLazypayRequest(c.logger, ctx, execReq.Method, execReq.URL, execReq.Headers, jsonBody)
+
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
+		logLazypayResponse(c.logger, ctx, execReq.URL, 0, nil, fmt.Errorf("executor error: %w", err))
 		return nil, fmt.Errorf("executor error: %w", err)
 	}
+
+	// Log response
+	logLazypayResponse(c.logger, ctx, execReq.URL, resp.StatusCode, resp.Body, nil)
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
@@ -108,11 +128,18 @@ func (c *OnboardingClient) GetOnboardingStatus(ctx context.Context, mobile strin
 		Body: nil,
 	}
 
+	// Log request
+	logLazypayRequest(c.logger, ctx, execReq.Method, execReq.URL, execReq.Headers, nil)
+
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
+		logLazypayResponse(c.logger, ctx, execReq.URL, 0, nil, fmt.Errorf("executor error: %w", err))
 		return nil, fmt.Errorf("executor error: %w", err)
 	}
+
+	// Log response
+	logLazypayResponse(c.logger, ctx, execReq.URL, resp.StatusCode, resp.Body, nil)
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {

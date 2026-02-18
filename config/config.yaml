@@ -8,10 +8,10 @@ http:
 
 db:
   host: "localhost"
-  port: 5432
-  user: "lending_hub"
-  password: "lending_hub"
-  name: "lending_hub"
+  port: 3307
+  user: "common_stage"
+  password: "popstage2020"
+  name: "lender_hub"
   sslmode: "disable"
   max_open_conns: 50
   max_idle_conns: 10
@@ -20,8 +20,10 @@ db:
 
 lazypay:
   base_url: "https://sandbox.lazypay.in"
-  access_key: "CHANGE_ME"
-  secret_key: "CHANGE_ME"
+  access_key: "CO4KGG9DJEDZI3J04NNO"
+  secret_key: "49165512a4d220c580175223711c49dc68ab7cdf"
+  merchant_id: ""  # Optional - leave empty if you only have subMerchantId
+  sub_merchant_id: "YOUR_SUB_MERCHANT_ID"  # Replace with your actual subMerchantId
   profile_timeout: 10s
   payment_timeout: 5s
   enabled: false

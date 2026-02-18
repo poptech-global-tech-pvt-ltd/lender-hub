@@ -17,9 +17,10 @@ type Config struct {
 }
 
 func New(cfg Config) (*Logger, error) {
+	// Set log level: Debug for local/dev, Info for staging/prod
 	level := zapcore.InfoLevel
 	if cfg.Env == "local" || cfg.Env == "dev" {
-		level = zapcore.DebugLevel
+		level = zapcore.DebugLevel // Debug level shows Info, Debug, Warn, Error
 	}
 
 	encoderCfg := zap.NewProductionEncoderConfig()

@@ -3,11 +3,12 @@ package client
 import (
 	"lending-hub-service/internal/adapter/lazypay/config"
 	"lending-hub-service/internal/adapter/lazypay/signature"
-	"lending-hub-service/internal/infrastructure/http/executor"
 	onbPort "lending-hub-service/internal/domain/onboarding/port"
 	orderPort "lending-hub-service/internal/domain/order/port"
 	profilePort "lending-hub-service/internal/domain/profile/port"
 	refundPort "lending-hub-service/internal/domain/refund/port"
+	"lending-hub-service/internal/infrastructure/http/executor"
+	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // LazypayClient aggregates all sub-clients and returns gateway implementations
@@ -27,6 +28,7 @@ func NewLazypayClient(
 	cfg *config.LazypayConfig,
 	profileExec executor.HttpExecutor,
 	paymentExec executor.HttpExecutor,
+	logger *baseLogger.Logger,
 ) *LazypayClient {
 	signer := signature.NewSignatureService(cfg.AccessKey, cfg.SecretKey)
 	c := &LazypayClient{
@@ -35,10 +37,10 @@ func NewLazypayClient(
 		profileExec: profileExec,
 		paymentExec: paymentExec,
 	}
-	c.profile = NewProfileClient(cfg, signer, profileExec)
-	c.onboarding = NewOnboardingClient(cfg, signer, profileExec)
-	c.payment = NewPaymentClient(cfg, signer, paymentExec)
-	c.refund = NewRefundClient(cfg, signer, paymentExec)
+	c.profile = NewProfileClient(cfg, signer, profileExec, logger)
+	c.onboarding = NewOnboardingClient(cfg, signer, profileExec, logger)
+	c.payment = NewPaymentClient(cfg, signer, paymentExec, logger)
+	c.refund = NewRefundClient(cfg, signer, paymentExec, logger)
 	return c
 }
 

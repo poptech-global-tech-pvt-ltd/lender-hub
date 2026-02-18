@@ -44,6 +44,8 @@ type LazypayConfig struct {
 	BaseURL        string        `mapstructure:"base_url"`
 	AccessKey      string        `mapstructure:"access_key"`
 	SecretKey      string        `mapstructure:"secret_key"`
+	MerchantID     string        `mapstructure:"merchant_id"`     // Optional - use subMerchantId if not provided
+	SubMerchantID  string        `mapstructure:"sub_merchant_id"` // Used in onboarding and as fallback
 	ProfileTimeout time.Duration `mapstructure:"profile_timeout"`
 	PaymentTimeout time.Duration `mapstructure:"payment_timeout"`
 	Enabled        bool          `mapstructure:"enabled"`
@@ -61,11 +63,11 @@ type RedisConfig struct {
 
 // KafkaConfig defines Kafka event streaming settings
 type KafkaConfig struct {
-	Brokers       []string `mapstructure:"brokers"`
-	Enabled       bool     `mapstructure:"enabled"`
-	ProfileTopic  string   `mapstructure:"profile_topic"`
-	OrderTopic    string   `mapstructure:"order_topic"`
-	RefundTopic   string   `mapstructure:"refund_topic"`
+	Brokers      []string `mapstructure:"brokers"`
+	Enabled      bool     `mapstructure:"enabled"`
+	ProfileTopic string   `mapstructure:"profile_topic"`
+	OrderTopic   string   `mapstructure:"order_topic"`
+	RefundTopic  string   `mapstructure:"refund_topic"`
 }
 
 // Load reads configuration from file and environment variables

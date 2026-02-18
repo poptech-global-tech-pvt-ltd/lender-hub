@@ -17,6 +17,7 @@ import (
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // ProfileClient implements ProfileGateway for Lazypay
@@ -24,6 +25,7 @@ type ProfileClient struct {
 	config   *config.LazypayConfig
 	signer   *signature.SignatureService
 	executor executor.HttpExecutor
+	logger   *baseLogger.Logger
 }
 
 // NewProfileClient creates a new ProfileClient
@@ -31,11 +33,13 @@ func NewProfileClient(
 	cfg *config.LazypayConfig,
 	signer *signature.SignatureService,
 	exec executor.HttpExecutor,
+	logger *baseLogger.Logger,
 ) *ProfileClient {
 	return &ProfileClient{
 		config:   cfg,
 		signer:   signer,
 		executor: exec,
+		logger:   logger,
 	}
 }
 
@@ -47,8 +51,8 @@ func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.Cus
 	// Sign request
 	sig := c.signer.SignEligibility(req.Mobile, req.Email, 0) // amount 0 for discovery
 
-	// Map to LP request
-	lpReq := mapper.ToLPEligibilityRequest(req, c.config.AccessKey, c.config.MerchantID, sig)
+	// Map to LP request (use GetMerchantID() which falls back to SubMerchantID)
+	lpReq := mapper.ToLPEligibilityRequest(req, c.config.AccessKey, c.config.GetMerchantID(), sig)
 
 	// Marshal to JSON
 	jsonBody, err := json.Marshal(lpReq)
@@ -70,11 +74,18 @@ func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.Cus
 		Body: bytes.NewReader(jsonBody),
 	}
 
+	// Log request
+	c.logRequest(ctx, execReq.Method, execReq.URL, execReq.Headers, jsonBody)
+
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
+		c.logResponse(ctx, execReq.URL, 0, nil, fmt.Errorf("executor error: %w", err))
 		return nil, fmt.Errorf("executor error: %w", err)
 	}
+
+	// Log response
+	c.logResponse(ctx, execReq.URL, resp.StatusCode, resp.Body, nil)
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
@@ -116,11 +127,18 @@ func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile string) (*
 		Body: nil,
 	}
 
+	// Log request
+	c.logRequest(ctx, execReq.Method, execReq.URL, execReq.Headers, nil)
+
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
+		c.logResponse(ctx, execReq.URL, 0, nil, fmt.Errorf("executor error: %w", err))
 		return nil, fmt.Errorf("executor error: %w", err)
 	}
+
+	// Log response
+	c.logResponse(ctx, execReq.URL, resp.StatusCode, resp.Body, nil)
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
@@ -148,4 +166,14 @@ func (c *ProfileClient) handleErrorResponse(body []byte) (*profileResp.CustomerS
 		return nil, mapper.MapLPError(lpError.ErrorCode)
 	}
 	return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "provider error")
+}
+
+// logRequest logs the outgoing Lazypay request
+func (c *ProfileClient) logRequest(ctx context.Context, method, url string, headers map[string]string, body []byte) {
+	logLazypayRequest(c.logger, ctx, method, url, headers, body)
+}
+
+// logResponse logs the incoming Lazypay response
+func (c *ProfileClient) logResponse(ctx context.Context, url string, statusCode int, body []byte, err error) {
+	logLazypayResponse(c.logger, ctx, url, statusCode, body, err)
 }

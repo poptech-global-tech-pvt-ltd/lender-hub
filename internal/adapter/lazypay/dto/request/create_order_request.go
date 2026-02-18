@@ -4,16 +4,16 @@ import "lending-hub-service/internal/adapter/lazypay/dto/common"
 
 // LPCreateOrderRequest matches Lazypay /cof/v0/payment/order
 type LPCreateOrderRequest struct {
-	AccessKey     string              `json:"accessKey"`
-	MerchantID    string              `json:"merchantId"`
-	MerchantTxnID string              `json:"merchantTxnId"` // = paymentId
+	AccessKey     string               `json:"accessKey"`
+	MerchantID    string               `json:"merchantId,omitempty"` // Optional - not required by Lazypay
+	MerchantTxnID string               `json:"merchantTxnId"`        // = paymentId
 	User          common.LPUserDetails `json:"user"`
-	Amount        common.LPAmount     `json:"amount"`
-	ReturnURL     string              `json:"returnUrl"`
-	Signature     string              `json:"signature"`
-	Address       *common.LPAddress   `json:"address,omitempty"`
-	EMITenure     int                 `json:"emiTenure"`
-	ProductLines  []LPProductLine     `json:"productLines,omitempty"`
+	Amount        common.LPAmount      `json:"amount"`
+	ReturnURL     string               `json:"returnUrl"`
+	Signature     string               `json:"signature"`
+	Address       *common.LPAddress    `json:"address,omitempty"`
+	EMITenure     int                  `json:"emiTenure"`
+	ProductLines  []LPProductLine      `json:"productLines,omitempty"`
 }
 
 // LPProductLine represents a product line item
