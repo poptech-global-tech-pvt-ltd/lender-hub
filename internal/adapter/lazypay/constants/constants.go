@@ -1,15 +1,15 @@
 package constants
 
-// Lazypay API endpoints (appended to BaseURL)
+// Lazypay API endpoints (appended to BaseURL - matching Postman contracts)
 const (
-	PathEligibility      = "/v7/payment/eligibility"
-	PathCustomerStatus   = "/v7/payment/customerStatus"
-	PathCreateOnboarding = "/v7/createStandaloneOnboarding"
-	PathOnboardingStatus = "/v7/onboarding/status"
-	PathCreateOrder      = "/cof/v0/payment/order"
-	PathOrderEnquiry     = "/cof/v0/payment/enquiry"
-	PathRefund           = "/v7/refund"
-	PathRefundEnquiry    = "/v3/enquiry"
+	PathOnboarding       = "/api/lazypay/cof/v0/standalone/initiate-onboarding"
+	PathEligibility      = "/api/lazypay/v7/payment/eligibility"
+	PathCustomerStatus   = "/api/lazypay/cof/v0/customer-status"
+	PathCreateOrder      = "/api/lazypay/cof/v0/payment/order"
+	PathOrderEnquiry     = "/api/lazypay/v3/enquiry"
+	PathRefund           = "/api/lazypay/v0/refund"
+	PathRefundEnquiry    = "/api/lazypay/v3/enquiry" // Same as OrderEnquiry
+	PathOnboardingStatus = "/v7/onboarding/status"   // Keep old path if still used
 )
 
 // Lazypay error codes (provider-specific)
@@ -35,6 +35,7 @@ const (
 	HeaderAccessKey     = "accessKey"
 	HeaderSignature     = "signature"
 	HeaderContentType   = "Content-Type"
+	HeaderDeviceID      = "deviceId"
 	HeaderPlatform      = "platform"
 	HeaderUserIPAddress = "userIpAddress"
 

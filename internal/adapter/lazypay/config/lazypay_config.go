@@ -5,11 +5,12 @@ type LazypayConfig struct {
 	BaseURL        string `yaml:"baseUrl"`
 	AccessKey      string `yaml:"accessKey"`
 	SecretKey      string `yaml:"secretKey"`
-	MerchantID     string `yaml:"merchantId"`      // Optional - use SubMerchantID if empty
-	SubMerchantID  string `yaml:"subMerchantId"`   // Used in onboarding and as fallback
+	MerchantID     string `yaml:"merchantId"`     // Optional - use SubMerchantID if empty
+	SubMerchantID  string `yaml:"subMerchantId"`  // Used in onboarding and as fallback
+	ReturnURL      string `yaml:"returnUrl"`      // Callback URL for redirects
 	ProfileTimeout int    `yaml:"profileTimeout"` // seconds
 	PaymentTimeout int    `yaml:"paymentTimeout"` // seconds
-	WebhookSecret  string `yaml:"webhookSecret"`   // for verifying inbound webhooks
+	WebhookSecret  string `yaml:"webhookSecret"`  // for verifying inbound webhooks
 }
 
 // GetMerchantID returns MerchantID if set, otherwise SubMerchantID as fallback

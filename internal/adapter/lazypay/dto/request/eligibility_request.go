@@ -2,12 +2,9 @@ package request
 
 import "lending-hub-service/internal/adapter/lazypay/dto/common"
 
-// LPEligibilityRequest matches Lazypay /v7/payment/eligibility
+// LPEligibilityRequest matches Lazypay POST /api/lazypay/v7/payment/eligibility
 type LPEligibilityRequest struct {
-	AccessKey   string               `json:"accessKey"`
-	MerchantID  string               `json:"merchantId,omitempty"` // Optional - not required by Lazypay
-	User        common.LPUserDetails `json:"user"`
-	OrderAmount common.LPAmount      `json:"orderAmount"`
-	Signature   string               `json:"signature"`
-	Source      string               `json:"source,omitempty"`
+	UserDetails common.LPUserDetails `json:"userDetails"`
+	Amount      common.LPAmount      `json:"amount"`
+	Source      string               `json:"source"`
 }

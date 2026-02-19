@@ -18,4 +18,5 @@ type OrderRepository interface {
 type PaymentMappingRepository interface {
 	Create(ctx context.Context, mapping *entity.PaymentMapping) error
 	GetByMerchantTxnID(ctx context.Context, lenderMerchantTxnID string) (*entity.PaymentMapping, error)
+	GetByPaymentID(ctx context.Context, paymentID string) (*entity.PaymentMapping, error) // Look up merchantTxnId from paymentId
 }

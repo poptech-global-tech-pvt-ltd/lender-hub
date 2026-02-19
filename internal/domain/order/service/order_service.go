@@ -16,13 +16,14 @@ import (
 
 // OrderService handles order operations
 type OrderService struct {
-	orderRepo      port.OrderRepository
-	mappingRepo    port.PaymentMappingRepository
-	idempotency    *IdempotencyService
-	gateway        port.OrderGateway
-	profileUpdater *profileService.ProfileUpdater
-	publisher      port.OrderEventPublisher
-	idgen          *idgen.Generator
+	orderRepo       port.OrderRepository
+	mappingRepo     port.PaymentMappingRepository
+	idempotency     *IdempotencyService
+	gateway         port.OrderGateway
+	profileUpdater  *profileService.ProfileUpdater
+	publisher       port.OrderEventPublisher
+	idgen           *idgen.Generator
+	contactResolver *profileService.UserContactResolver
 }
 
 // NewOrderService creates a new OrderService
@@ -34,15 +35,17 @@ func NewOrderService(
 	profileUpdater *profileService.ProfileUpdater,
 	publisher port.OrderEventPublisher,
 	idgen *idgen.Generator,
+	contactResolver *profileService.UserContactResolver,
 ) *OrderService {
 	return &OrderService{
-		orderRepo:      orderRepo,
-		mappingRepo:    mappingRepo,
-		idempotency:    idempotency,
-		gateway:        gateway,
-		profileUpdater: profileUpdater,
-		publisher:      publisher,
-		idgen:          idgen,
+		orderRepo:       orderRepo,
+		mappingRepo:     mappingRepo,
+		idempotency:     idempotency,
+		gateway:         gateway,
+		profileUpdater:  profileUpdater,
+		publisher:       publisher,
+		idgen:           idgen,
+		contactResolver: contactResolver,
 	}
 }
 
@@ -84,8 +87,48 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		break
 	}
 
+	// Resolve user contact (mobile + email) from userId
+	contact, err := s.contactResolver.Resolve(ctx, req.UserID)
+	if err != nil {
+		s.idempotency.Fail(ctx, paymentID)
+		return nil, sharedErrors.New(sharedErrors.CodeUserContactNotFound, 422, "Unable to resolve user contact details (mobile required)")
+	}
+
+	// Generate merchantTxnId internally (mapped to caller's paymentId)
+	merchantTxnID := s.idgen.MerchantTxnID()
+
+	// Build EMI plans from req.EmiSelection (for now, single plan)
+	// TODO: In production, fetch full EMI plans from eligibility cache
+	emiPlans := []port.LPEmiPlan{
+		{
+			Tenure:                   req.EmiSelection.Tenure,
+			Type:                     req.EmiSelection.Type,
+			Emi:                      0, // Not in simplified EmiSelection
+			TotalPayableAmount:       0, // Not in simplified EmiSelection
+			InterestRate:             0, // Not in simplified EmiSelection
+			Principal:                0, // Not in simplified EmiSelection
+			TotalInterestAmount:      0,
+			TotalProcessingFee:       0,
+			ProcessingFeeGst:         0,
+			FirstEmiDueDate:          "",
+			SubventionTag:            nil,
+			DiscountedInterestAmount: 0,
+			Schedule:                 nil,
+		},
+	}
+
+	// Use returnUrl from request if provided, otherwise from config (handled in gateway)
+	returnURL := req.ReturnURL
+
 	// Call gateway to create order
-	gatewayResp, err := s.gateway.CreateOrder(ctx, req)
+	gatewayResp, err := s.gateway.CreateOrder(ctx, port.OrderInput{
+		MerchantTxnID: merchantTxnID,
+		Mobile:        contact.Mobile,
+		Email:         contact.Email,
+		Amount:        req.Amount,
+		Currency:      req.Currency,
+		EmiPlans:      emiPlans,
+	})
 	if err != nil {
 		// Mark idempotency as failed
 		s.idempotency.Fail(ctx, paymentID)
@@ -99,15 +142,15 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	order := &entity.Order{
 		PaymentID:           paymentID,
 		UserID:              req.UserID,
-		MerchantID:          req.MerchantID,
+		MerchantID:          "", // From config, not in request
 		Lender:              "LAZYPAY", // TODO: make configurable
 		Amount:              req.Amount,
 		Currency:            req.Currency,
 		Status:              entity.OrderStatus(gatewayResp.Status),
-		ReturnURL:           &req.ReturnURL,
+		ReturnURL:           &returnURL,
 		EMIPlan:             emiPlanBytes,
 		LenderOrderID:       gatewayResp.LenderOrderID,
-		LenderMerchantTxnID: gatewayResp.LenderOrderID, // Use lenderOrderID as merchant txn ID
+		LenderMerchantTxnID: &merchantTxnID, // Our generated merchantTxnId
 		LastErrorCode:       gatewayResp.ErrorCode,
 		LastErrorMessage:    gatewayResp.ErrorMessage,
 		CreatedAt:           time.Now().UTC(),
@@ -120,20 +163,23 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		return nil, err
 	}
 
-	// Create payment mapping
-	if gatewayResp.LenderOrderID != nil {
-		mapping := &entity.PaymentMapping{
-			PaymentID:           paymentID,
-			UserID:              req.UserID,
-			Lender:              order.Lender,
-			LenderMerchantTxnID: *gatewayResp.LenderOrderID,
-			LenderOrderID:       gatewayResp.LenderOrderID,
-			CreatedAt:           time.Now().UTC(),
-			UpdatedAt:           time.Now().UTC(),
-		}
-		if err := s.mappingRepo.Create(ctx, mapping); err != nil {
-			// Log error but don't fail the request
-		}
+	// Refresh user contact on successful order creation (optional - data may have updated)
+	if gatewayResp.Status == "SUCCESS" || gatewayResp.Status == "PENDING" {
+		_, _ = s.contactResolver.RefreshFromSource(ctx, req.UserID, "ORDER")
+	}
+
+	// Create payment mapping: paymentId (caller's) → merchantTxnId (our generated)
+	mapping := &entity.PaymentMapping{
+		PaymentID:           paymentID,      // Caller's idempotency key
+		UserID:              req.UserID,
+		Lender:              order.Lender,
+		LenderMerchantTxnID: merchantTxnID, // Our generated merchantTxnId sent to Lazypay
+		LenderOrderID:       gatewayResp.LenderOrderID,
+		CreatedAt:           time.Now().UTC(),
+		UpdatedAt:           time.Now().UTC(),
+	}
+	if err := s.mappingRepo.Create(ctx, mapping); err != nil {
+		// Log error but don't fail the request
 	}
 
 	// Build response
@@ -159,7 +205,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		Type:          port.EventOrderCreated,
 		PaymentID:     paymentID,
 		UserID:        req.UserID,
-		MerchantID:    req.MerchantID,
+		MerchantID:    "", // From config, not in request
 		Lender:        order.Lender,
 		Amount:        req.Amount,
 		Currency:      req.Currency,

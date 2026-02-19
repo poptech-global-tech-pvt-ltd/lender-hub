@@ -40,3 +40,4 @@ func (g *Generator) WebhookID() string      { return g.Generate(PrefixWebhook) }
 func (g *Generator) UserProfileID() string  { return g.Generate(PrefixUserProfile) }
 func (g *Generator) IdempotencyKey() string { return g.Generate(PrefixIdempotency) }
 func (g *Generator) LockingID() string      { return g.Generate(PrefixLocking) }
+func (g *Generator) MerchantTxnID() string  { return g.Generate(PrefixTransaction) } // merchantTxnId for Lazypay

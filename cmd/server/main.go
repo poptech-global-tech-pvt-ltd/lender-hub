@@ -24,6 +24,7 @@ import (
 
 	// Infrastructure - Phase 4B (logging + business metrics)
 	"lending-hub-service/internal/infrastructure/observability/metrics"
+	"lending-hub-service/internal/infrastructure/userprofile"
 	"lending-hub-service/pkg/idgen"
 	baseLogger "lending-hub-service/pkg/logger"
 	baseValidator "lending-hub-service/pkg/validator"
@@ -42,6 +43,8 @@ import (
 	orderStub "lending-hub-service/internal/domain/order/stub"
 	"lending-hub-service/internal/domain/profile"
 	profilePort "lending-hub-service/internal/domain/profile/port"
+	profileRepo "lending-hub-service/internal/domain/profile/repository"
+	profileService "lending-hub-service/internal/domain/profile/service"
 	profileStub "lending-hub-service/internal/domain/profile/stub"
 	"lending-hub-service/internal/domain/refund"
 	refundPort "lending-hub-service/internal/domain/refund/port"
@@ -209,6 +212,25 @@ func main() {
 	orderEventPublisher := kafka.NewOrderEventPublisher(producer)
 
 	// ═══════════════════════════════════════
+	// 6.5. User Contact Resolver
+	// ═══════════════════════════════════════
+	// User Profile Service client
+	profileServiceClient := userprofile.NewClient(
+		cfg.UserProfileService.BaseURL,
+		cfg.UserProfileService.Timeout,
+	)
+
+	// User Contact Repository
+	userContactRepo := profileRepo.NewUserContactRepository(sqlDB)
+
+	// User Contact Resolver
+	contactResolver := profileService.NewUserContactResolver(
+		userContactRepo,
+		profileServiceClient,
+		logger,
+	)
+
+	// ═══════════════════════════════════════
 	// 7. Lazypay adapter (Phase 3C)
 	// ═══════════════════════════════════════
 	var profileGateway profilePort.ProfileGateway
@@ -224,10 +246,11 @@ func main() {
 			SecretKey:      cfg.Lazypay.SecretKey,
 			MerchantID:     cfg.Lazypay.MerchantID,
 			SubMerchantID:  cfg.Lazypay.SubMerchantID,
+			ReturnURL:      cfg.Lazypay.ReturnURL,
 			ProfileTimeout: int(cfg.Lazypay.ProfileTimeout.Seconds()),
 			PaymentTimeout: int(cfg.Lazypay.PaymentTimeout.Seconds()),
 		}
-		lazypayClient := lazypay.NewAdapter(lpCfg, logger)
+		lazypayClient := lazypay.NewAdapter(lpCfg, logger, idGen)
 		profileGateway = lazypayClient.ProfileGateway()
 		onboardingGateway = lazypayClient.OnboardingGateway()
 		orderGateway = lazypayClient.OrderGateway()
@@ -245,15 +268,16 @@ func main() {
 	// ═══════════════════════════════════════
 	// 8. Domain modules
 	// ═══════════════════════════════════════
-	// Profile module
-	profileModule := profile.NewModule(gormDB, profileGateway, profileCache, profileEventPublisher)
+	// Profile module (cache no longer used — persistence to lender_user)
+	_ = profileCache
+	profileModule := profile.NewModule(gormDB, profileGateway, profileEventPublisher, contactResolver, profileServiceClient, logger)
 	profileUpdater := profileModule.Updater
 
 	// Onboarding module
-	onboardingModule := onboarding.NewModule(gormDB, onboardingGateway, profileUpdater, idGen)
+	onboardingModule := onboarding.NewModule(gormDB, onboardingGateway, profileUpdater, idGen, contactResolver)
 
 	// Order module
-	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen)
+	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen, contactResolver)
 
 	// Refund module
 	orderRepo := orderRepo.NewOrderRepository(gormDB)

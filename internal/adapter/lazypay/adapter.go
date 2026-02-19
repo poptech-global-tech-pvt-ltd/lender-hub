@@ -4,12 +4,13 @@ import (
 	"lending-hub-service/internal/adapter/lazypay/client"
 	"lending-hub-service/internal/adapter/lazypay/config"
 	"lending-hub-service/internal/infrastructure/http/executor"
+	"lending-hub-service/pkg/idgen"
 	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // NewAdapter creates the full Lazypay adapter with all gateways
-func NewAdapter(cfg *config.LazypayConfig, logger *baseLogger.Logger) *client.LazypayClient {
+func NewAdapter(cfg *config.LazypayConfig, logger *baseLogger.Logger, idgen *idgen.Generator) *client.LazypayClient {
 	profileExec := executor.NewProfileExecutor()
 	paymentExec := executor.NewPaymentExecutor()
-	return client.NewLazypayClient(cfg, profileExec, paymentExec, logger)
+	return client.NewLazypayClient(cfg, profileExec, paymentExec, logger, idgen)
 }

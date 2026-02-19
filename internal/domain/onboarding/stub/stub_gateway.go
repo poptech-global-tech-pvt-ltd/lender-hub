@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	req "lending-hub-service/internal/domain/onboarding/dto/request"
 	res "lending-hub-service/internal/domain/onboarding/dto/response"
 	"lending-hub-service/internal/domain/onboarding/port"
 )
@@ -18,16 +17,16 @@ func NewStubOnboardingGateway() port.OnboardingGateway {
 }
 
 // StartOnboarding returns a fake redirect URL and PENDING status
-func (g *StubOnboardingGateway) StartOnboarding(ctx context.Context, req req.StartOnboardingRequest) (*res.OnboardingResponse, error) {
+func (g *StubOnboardingGateway) StartOnboarding(ctx context.Context, mobile, email string) (*res.OnboardingResponse, error) {
 	// Generate a fake provider onboarding ID
-	providerOnboardingID := fmt.Sprintf("LP-%s", req.OnboardingTxnID)
+	providerOnboardingID := fmt.Sprintf("LP-ONB-%s", mobile)
 
 	// Return fake redirect URL
-	redirectURL := fmt.Sprintf("https://stub.lazypay.in/onboarding/%s?returnUrl=%s", providerOnboardingID, req.ReturnURL)
+	redirectURL := fmt.Sprintf("https://stub.lazypay.in/onboarding/%s", providerOnboardingID)
 
 	return &res.OnboardingResponse{
 		OnboardingID:    providerOnboardingID,
-		OnboardingTxnID: req.OnboardingTxnID,
+		OnboardingTxnID: "", // Set by service layer
 		Provider:        "LAZYPAY",
 		RedirectURL:     redirectURL,
 		Status:          "PENDING",
@@ -35,7 +34,7 @@ func (g *StubOnboardingGateway) StartOnboarding(ctx context.Context, req req.Sta
 }
 
 // GetOnboardingStatus returns a stub status response
-func (g *StubOnboardingGateway) GetOnboardingStatus(ctx context.Context, mobile string) (*res.OnboardingStatusResponse, error) {
+func (g *StubOnboardingGateway) GetOnboardingStatus(ctx context.Context, onboardingID string) (*res.OnboardingStatusResponse, error) {
 	return &res.OnboardingStatusResponse{
 		OnboardingID: "stub-onboarding-id",
 		UserID:       "stub-user",

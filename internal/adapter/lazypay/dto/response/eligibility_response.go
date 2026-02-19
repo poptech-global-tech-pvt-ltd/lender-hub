@@ -1,23 +1,46 @@
 package response
 
-// LPEligibilityResponse is Lazypay's eligibility API response
+// LPEligibilityResponse is for POST /api/lazypay/v7/payment/eligibility
 type LPEligibilityResponse struct {
-	Status                string      `json:"status"`       // "APPROVED", "REJECTED"
-	EligibilityResponseID string      `json:"eligibilityResponseId"`
-	PreApproved           bool         `json:"preApproved"`
-	CreditLimit           float64      `json:"creditLimit"`
-	AvailableLimit        float64      `json:"availableLimit"`
-	CreditLineActive      bool         `json:"creditLineActive"`
-	EMIPlans              []LPEMIPlan  `json:"emiPlans"`
-	ReasonCode            string       `json:"reasonCode,omitempty"`
-	ReasonMessage         string       `json:"reasonMessage,omitempty"`
-	Blocked               bool         `json:"blocked"`
-	BlockReason           string       `json:"blockReason,omitempty"`
+	BNPL                  *LPBNPLResult  `json:"bnpl"`
+	COF                   *LPCOFResult   `json:"cof"`
+	EligibilityResponseID string         `json:"eligibilityResponseId"`
+	CustomParams          interface{}    `json:"customParams"`
+	ExistingUser          bool           `json:"existingUser"`
 }
 
-// LPEMIPlan represents an EMI plan option
-type LPEMIPlan struct {
-	Tenure      int     `json:"tenure"`
-	EMI         float64 `json:"emi"`
-	TotalAmount float64 `json:"totalAmount"`
+// LPBNPLResult represents BNPL section (ignored for Pay-in-3)
+type LPBNPLResult struct {
+	TxnEligibility  bool     `json:"txnEligibility"`
+	Reason          string   `json:"reason"`
+	Code            string   `json:"code"`
+	UserEligibility bool     `json:"userEligibility"`
+	SignUpModes     []string `json:"signUpModes"`
+}
+
+// LPCOFResult represents COF section (used for Pay-in-3)
+type LPCOFResult struct {
+	TxnEligibility  bool        `json:"txnEligibility"`
+	Reason          string      `json:"reason"`
+	Code            string      `json:"code"`
+	AvailableLimit  float64     `json:"availableLimit"`
+	EmiPlans        []LPEmiPlan `json:"emiPlans"`
+}
+
+// LPEmiPlan represents an EMI plan from eligibility
+type LPEmiPlan struct {
+	InterestRate             float64  `json:"interestRate"`
+	Tenure                   int      `json:"tenure"`
+	Emi                      float64  `json:"emi"`
+	TotalInterestAmount      float64  `json:"totalInterestAmount"`
+	Principal                float64  `json:"principal"`
+	TotalProcessingFee       float64  `json:"totalProcessingFee"`
+	ProcessingFeeGst         float64  `json:"processingFeeGst"`
+	TotalPayableAmount       float64  `json:"totalPayableAmount"`
+	FirstEmiDueDate          string   `json:"firstEmiDueDate"`
+	SubventionTag            *string  `json:"subventionTag"`
+	DiscountedInterestAmount float64  `json:"discountedInterestAmount"`
+	Schedule                 *string  `json:"schedule"`
+	Type                     string   `json:"type"`
+	DownPayment              *float64 `json:"downPayment"`
 }

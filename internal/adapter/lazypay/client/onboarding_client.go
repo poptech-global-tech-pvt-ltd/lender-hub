@@ -12,7 +12,6 @@ import (
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
-	onbReq "lending-hub-service/internal/domain/onboarding/dto/request"
 	onbResp "lending-hub-service/internal/domain/onboarding/dto/response"
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
@@ -26,6 +25,7 @@ type OnboardingClient struct {
 	signer   *signature.SignatureService
 	executor executor.HttpExecutor
 	logger   *baseLogger.Logger
+	mapper   *mapper.OnboardingMapper
 }
 
 // NewOnboardingClient creates a new OnboardingClient
@@ -35,30 +35,29 @@ func NewOnboardingClient(
 	exec executor.HttpExecutor,
 	logger *baseLogger.Logger,
 ) *OnboardingClient {
+	mapperCfg := &mapper.OnboardingMapperConfig{
+		SubMerchantID: cfg.SubMerchantID,
+		ReturnURL:     cfg.ReturnURL,
+	}
 	return &OnboardingClient{
 		config:   cfg,
 		signer:   signer,
 		executor: exec,
 		logger:   logger,
+		mapper:   mapper.NewOnboardingMapper(mapperCfg),
 	}
 }
 
 // StartOnboarding implements OnboardingGateway.StartOnboarding
-func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.StartOnboardingRequest) (*onbResp.OnboardingResponse, error) {
+func (c *OnboardingClient) StartOnboarding(ctx context.Context, mobile, email string) (*onbResp.OnboardingResponse, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
-	// Map to LP request - only set MerchantID if we have one, otherwise use subMerchantId
-	merchantID := c.config.GetMerchantID()
-	lpReq := mapper.ToLPOnboardingRequest(req, c.config.AccessKey, merchantID)
-	// Always set SubMerchantID if provided (preferred over merchantId)
-	if c.config.SubMerchantID != "" {
-		lpReq.SubMerchantID = c.config.SubMerchantID
-		// If we only have subMerchantId, don't send merchantId
-		if c.config.MerchantID == "" {
-			lpReq.MerchantID = ""
-		}
-	}
+	// Sign request using SignOnboarding (same as SignCustomerStatus)
+	sig := c.signer.SignOnboarding(mobile)
+
+	// Map to LP request (Postman contract: customParams, userDetails, returnUrl, source)
+	lpReq := c.mapper.ToLPRequest(mobile, email)
 
 	// Marshal to JSON
 	jsonBody, err := json.Marshal(lpReq)
@@ -67,16 +66,12 @@ func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.Start
 	}
 
 	// Build executor request
+	url := fmt.Sprintf("%s%s", c.config.BaseURL, lpConstants.PathOnboarding)
 	execReq := executor.Request{
-		Method: http.MethodPost,
-		URL:    c.config.BaseURL + lpConstants.PathCreateOnboarding,
-		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:     c.config.AccessKey,
-			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
-			lpConstants.HeaderPlatform:      rc.Platform,
-			lpConstants.HeaderUserIPAddress: rc.UserIP,
-		},
-		Body: bytes.NewReader(jsonBody),
+		Method:  http.MethodPost,
+		URL:     url,
+		Headers: headersWithDevice(c.config.AccessKey, sig, rc),
+		Body:    bytes.NewReader(jsonBody),
 	}
 
 	// Log request
@@ -103,17 +98,23 @@ func (c *OnboardingClient) StartOnboarding(ctx context.Context, req onbReq.Start
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response
-	return mapper.FromLPOnboardingResponse(&lpResp, req.OnboardingTxnID), nil
+	// Map to canonical response (onboardingTxnID generated in service layer, not available here)
+	return &onbResp.OnboardingResponse{
+		OnboardingID:    lpResp.OnboardingID,
+		OnboardingTxnID: "", // Set by service layer
+		Provider:        "LAZYPAY",
+		RedirectURL:     lpResp.RedirectURL,
+		Status:          lpResp.Status,
+	}, nil
 }
 
 // GetOnboardingStatus implements OnboardingGateway.GetOnboardingStatus
-func (c *OnboardingClient) GetOnboardingStatus(ctx context.Context, mobile string) (*onbResp.OnboardingStatusResponse, error) {
+func (c *OnboardingClient) GetOnboardingStatus(ctx context.Context, onboardingID string) (*onbResp.OnboardingStatusResponse, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
 	// Build URL with query params
-	url := fmt.Sprintf("%s%s?mobile=%s", c.config.BaseURL, lpConstants.PathOnboardingStatus, mobile)
+	url := fmt.Sprintf("%s%s?onboardingId=%s", c.config.BaseURL, lpConstants.PathOnboardingStatus, onboardingID)
 
 	// Build executor request
 	execReq := executor.Request{

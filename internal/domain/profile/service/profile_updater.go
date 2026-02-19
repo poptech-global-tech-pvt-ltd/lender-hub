@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"time"
-
 	"lending-hub-service/internal/domain/profile/entity"
 	"lending-hub-service/internal/domain/profile/port"
 	sharedErrors "lending-hub-service/internal/shared/errors"

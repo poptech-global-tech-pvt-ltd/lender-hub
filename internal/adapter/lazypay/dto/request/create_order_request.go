@@ -2,24 +2,29 @@ package request
 
 import "lending-hub-service/internal/adapter/lazypay/dto/common"
 
-// LPCreateOrderRequest matches Lazypay /cof/v0/payment/order
+// LPCreateOrderRequest matches Lazypay POST /api/lazypay/cof/v0/payment/order
 type LPCreateOrderRequest struct {
-	AccessKey     string               `json:"accessKey"`
-	MerchantID    string               `json:"merchantId,omitempty"` // Optional - not required by Lazypay
-	MerchantTxnID string               `json:"merchantTxnId"`        // = paymentId
-	User          common.LPUserDetails `json:"user"`
+	MerchantTxnID string               `json:"merchantTxnId"`
 	Amount        common.LPAmount      `json:"amount"`
+	UserDetails   common.LPUserDetails `json:"userDetails"`
+	Source        string               `json:"source"`
 	ReturnURL     string               `json:"returnUrl"`
-	Signature     string               `json:"signature"`
-	Address       *common.LPAddress    `json:"address,omitempty"`
-	EMITenure     int                  `json:"emiTenure"`
-	ProductLines  []LPProductLine      `json:"productLines,omitempty"`
+	EmiPlans      []LPEmiPlan          `json:"emiPlans"`
 }
 
-// LPProductLine represents a product line item
-type LPProductLine struct {
-	Name     string `json:"name"`
-	SKU      string `json:"sku"`
-	Quantity int    `json:"quantity"`
-	Price    string `json:"price"` // String "1000.00"
+// LPEmiPlan represents an EMI plan option
+type LPEmiPlan struct {
+	InterestRate             float64 `json:"interestRate"`
+	Tenure                   int     `json:"tenure"`
+	Emi                      float64 `json:"emi"`
+	TotalInterestAmount      float64 `json:"totalInterestAmount"`
+	Principal                float64 `json:"principal"`
+	TotalProcessingFee       float64 `json:"totalProcessingFee"`
+	ProcessingFeeGst         float64 `json:"processingFeeGst"`
+	TotalPayableAmount       float64 `json:"totalPayableAmount"`
+	FirstEmiDueDate          string  `json:"firstEmiDueDate"`
+	SubventionTag            *string `json:"subventionTag,omitempty"`
+	DiscountedInterestAmount float64 `json:"discountedInterestAmount"`
+	Schedule                 *string `json:"schedule,omitempty"`
+	Type                     string  `json:"type"`
 }

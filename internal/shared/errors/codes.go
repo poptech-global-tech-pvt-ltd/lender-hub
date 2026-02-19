@@ -11,11 +11,12 @@ const (
 	CodeRateLimited    = "RATE_LIMIT_EXCEEDED"
 
 	// Profile-specific
-	CodeUserBlocked       = "PAYIN3_USER_BLOCKED"
-	CodeInsufficientLimit = "PAYIN3_INSUFFICIENT_LIMIT"
-	CodeUserDataInvalid   = "PAYIN3_USER_DATA_INVALID"
-	CodeUserNotFound      = "PAYIN3_USER_NOT_FOUND"
-	CodeInvalidTransition = "PAYIN3_INVALID_STATE_TRANSITION"
+	CodeUserBlocked         = "LENDER_USER_BLOCKED"
+	CodeInsufficientLimit   = "PAYIN3_INSUFFICIENT_LIMIT"
+	CodeUserDataInvalid     = "PAYIN3_USER_DATA_INVALID"
+	CodeUserNotFound        = "PAYIN3_USER_NOT_FOUND"
+	CodeInvalidTransition   = "PAYIN3_INVALID_STATE_TRANSITION"
+	CodeUserContactNotFound = "PAYIN3_USER_CONTACT_NOT_FOUND"
 
 	// Onboarding-specific
 	CodeOnboardingNotFound  = "ONBOARDING_NOT_FOUND"

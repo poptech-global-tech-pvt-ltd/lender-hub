@@ -18,6 +18,7 @@ import (
 type RefundService struct {
 	refundRepo     port.RefundRepository
 	orderRepo      orderPort.OrderRepository
+	mappingRepo    orderPort.PaymentMappingRepository
 	gateway        port.RefundGateway
 	profileUpdater *profileService.ProfileUpdater
 }
@@ -26,12 +27,14 @@ type RefundService struct {
 func NewRefundService(
 	refundRepo port.RefundRepository,
 	orderRepo orderPort.OrderRepository,
+	mappingRepo orderPort.PaymentMappingRepository,
 	gateway port.RefundGateway,
 	profileUpdater *profileService.ProfileUpdater,
 ) *RefundService {
 	return &RefundService{
 		refundRepo:     refundRepo,
 		orderRepo:      orderRepo,
+		mappingRepo:    mappingRepo,
 		gateway:        gateway,
 		profileUpdater: profileUpdater,
 	}
@@ -90,8 +93,15 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 		}, nil
 	}
 
-	// Call gateway to process refund
-	gatewayResp, err := s.gateway.ProcessRefund(ctx, req)
+	// Look up merchantTxnId from paymentId mapping
+	mapping, err := s.mappingRepo.GetByPaymentID(ctx, req.PaymentID)
+	if err != nil || mapping == nil {
+		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order mapping not found")
+	}
+	merchantTxnID := mapping.LenderMerchantTxnID
+
+	// Call gateway to process refund (returns response + generated refundTxnId)
+	gatewayResp, refundTxnID, err := s.gateway.ProcessRefund(ctx, merchantTxnID, req.Amount, req.Currency)
 	if err != nil {
 		// Check if error is LP_DUPLICATE_REFUND
 		if domainErr, ok := err.(*sharedErrors.DomainError); ok && domainErr.Code == sharedErrors.CodeDuplicateRefund {
@@ -174,9 +184,8 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 	}
 
 	// Create refund entity
-	merchantTxnID := req.PaymentID
 	refund := &entity.Refund{
-		RefundID:              req.RefundID,
+		RefundID:              req.RefundID,     // Caller's reference
 		PaymentID:             req.PaymentID,
 		UserID:                order.UserID,
 		Lender:                order.Lender,
@@ -186,6 +195,7 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 		Reason:                reason,
 		ProviderRefundRefID:   req.RefundID, // idempotency key
 		ProviderMerchantTxnID: &merchantTxnID,
+		ProviderRefundTxnID:   &refundTxnID, // Our generated refundTxnId sent to Lazypay
 		LenderRefID:           gatewayResp.LenderRefID,
 		LenderStatus:          &gatewayResp.Status,
 		CreatedAt:             time.Now().UTC(),
@@ -198,7 +208,7 @@ func (s *RefundService) CreateRefund(ctx context.Context, req req.CreateRefundRe
 	}
 
 	return &res.RefundResponse{
-		RefundID:  refund.RefundID,
+		RefundID:  refund.RefundID, // Caller's reference
 		PaymentID: refund.PaymentID,
 		Provider:  gatewayResp.Provider,
 		Status:    gatewayResp.Status,

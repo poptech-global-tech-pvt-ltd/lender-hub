@@ -19,19 +19,19 @@ type Module struct {
 }
 
 // NewModule creates a new onboarding module with dependencies
-func NewModule(db *gorm.DB, gw port.OnboardingGateway, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator) *Module {
+func NewModule(db *gorm.DB, gw port.OnboardingGateway, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator, contactResolver *profileService.UserContactResolver) *Module {
 	repo := repository.NewOnboardingRepository(db)
 	eventStore := repository.NewOnboardingEventStore(db)
-	svc := service.NewOnboardingService(repo, eventStore, gw, profileUpdater, idgen)
+	svc := service.NewOnboardingService(repo, eventStore, gw, profileUpdater, idgen, contactResolver)
 	return &Module{
 		Service: svc,
 	}
 }
 
 // NewModuleWithStubs creates a new onboarding module with stub implementations
-func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator) *Module {
+func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator, contactResolver *profileService.UserContactResolver) *Module {
 	gw := stub.NewStubOnboardingGateway()
-	return NewModule(db, gw, profileUpdater, idgen)
+	return NewModule(db, gw, profileUpdater, idgen, contactResolver)
 }
 
 // RegisterRoutes registers onboarding module routes

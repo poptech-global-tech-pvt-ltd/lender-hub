@@ -104,6 +104,23 @@ func (r *postgresPaymentMappingRepository) GetByMerchantTxnID(ctx context.Contex
 	return toMappingEntity(&model), nil
 }
 
+// GetByPaymentID retrieves a payment mapping by payment_id (caller's idempotency key)
+func (r *postgresPaymentMappingRepository) GetByPaymentID(ctx context.Context, paymentID string) (*entity.PaymentMapping, error) {
+	var model infra.LenderPaymentMapping
+	err := r.db.WithContext(ctx).
+		Where("payment_id = ?", paymentID).
+		First(&model).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return toMappingEntity(&model), nil
+}
+
 // toOrderEntity converts GORM model to domain entity
 func toOrderEntity(model *infra.LenderPaymentState) *entity.Order {
 	return &entity.Order{

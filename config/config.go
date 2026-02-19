@@ -9,12 +9,13 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	Env     string        `mapstructure:"env"`
-	HTTP    HTTPConfig    `mapstructure:"http"`
-	DB      DBConfig      `mapstructure:"db"`
-	Lazypay LazypayConfig `mapstructure:"lazypay"`
-	Redis   RedisConfig   `mapstructure:"redis"`
-	Kafka   KafkaConfig   `mapstructure:"kafka"`
+	Env                string                   `mapstructure:"env"`
+	HTTP               HTTPConfig               `mapstructure:"http"`
+	DB                 DBConfig                 `mapstructure:"db"`
+	Lazypay            LazypayConfig            `mapstructure:"lazypay"`
+	Redis              RedisConfig              `mapstructure:"redis"`
+	Kafka              KafkaConfig              `mapstructure:"kafka"`
+	UserProfileService UserProfileServiceConfig `mapstructure:"userProfileService"`
 }
 
 // HTTPConfig defines HTTP server settings
@@ -46,6 +47,7 @@ type LazypayConfig struct {
 	SecretKey      string        `mapstructure:"secret_key"`
 	MerchantID     string        `mapstructure:"merchant_id"`     // Optional - use subMerchantId if not provided
 	SubMerchantID  string        `mapstructure:"sub_merchant_id"` // Used in onboarding and as fallback
+	ReturnURL      string        `mapstructure:"return_url"`      // Callback URL for redirects
 	ProfileTimeout time.Duration `mapstructure:"profile_timeout"`
 	PaymentTimeout time.Duration `mapstructure:"payment_timeout"`
 	Enabled        bool          `mapstructure:"enabled"`
@@ -59,6 +61,12 @@ type RedisConfig struct {
 	DialTimeout  time.Duration `mapstructure:"dial_timeout"`
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
+}
+
+// UserProfileServiceConfig defines external User Profile Service settings
+type UserProfileServiceConfig struct {
+	BaseURL string        `mapstructure:"baseURL"`
+	Timeout time.Duration `mapstructure:"timeout"`
 }
 
 // KafkaConfig defines Kafka event streaming settings
@@ -141,6 +149,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("kafka.profile_topic", "lending-hub.profile.events")
 	v.SetDefault("kafka.order_topic", "lending-hub.order.events")
 	v.SetDefault("kafka.refund_topic", "lending-hub.refund.events")
+
+	// User Profile Service defaults
+	v.SetDefault("userProfileService.baseURL", "https://userprofile-sit.popclub.co.in")
+	v.SetDefault("userProfileService.timeout", "5s")
 }
 
 func validate(cfg *Config) error {

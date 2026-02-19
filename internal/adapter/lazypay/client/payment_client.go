@@ -9,10 +9,12 @@ import (
 
 	"lending-hub-service/internal/adapter/lazypay/config"
 	lpConstants "lending-hub-service/internal/adapter/lazypay/constants"
+	lpCommon "lending-hub-service/internal/adapter/lazypay/dto/common"
+	lpReq "lending-hub-service/internal/adapter/lazypay/dto/request"
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
-	orderReq "lending-hub-service/internal/domain/order/dto/request"
+	orderPort "lending-hub-service/internal/domain/order/port"
 	orderResp "lending-hub-service/internal/domain/order/dto/response"
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
@@ -44,15 +46,42 @@ func NewPaymentClient(
 }
 
 // CreateOrder implements OrderGateway.CreateOrder
-func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrderRequest) (*orderResp.OrderResponse, error) {
+func (c *PaymentClient) CreateOrder(ctx context.Context, input orderPort.OrderInput) (*orderResp.OrderResponse, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
-	// Sign request
-	sig := c.signer.SignOrder(req.PaymentID, req.Amount)
+	// Map EMI plans from OrderInput to LP format
+	lpEmiPlans := make([]lpReq.LPEmiPlan, len(input.EmiPlans))
+	for i, plan := range input.EmiPlans {
+		lpEmiPlans[i] = lpReq.LPEmiPlan{
+			InterestRate:             plan.InterestRate,
+			Tenure:                   plan.Tenure,
+			Emi:                      plan.Emi,
+			TotalInterestAmount:      plan.TotalInterestAmount,
+			Principal:                plan.Principal,
+			TotalProcessingFee:       plan.TotalProcessingFee,
+			ProcessingFeeGst:         plan.ProcessingFeeGst,
+			TotalPayableAmount:       plan.TotalPayableAmount,
+			FirstEmiDueDate:          plan.FirstEmiDueDate,
+			SubventionTag:            plan.SubventionTag,
+			DiscountedInterestAmount: plan.DiscountedInterestAmount,
+			Schedule:                 plan.Schedule,
+			Type:                     plan.Type,
+		}
+	}
 
-	// Map to LP request (use GetMerchantID() which falls back to SubMerchantID)
-	lpReq := mapper.ToLPCreateOrderRequest(req, c.config.AccessKey, c.config.GetMerchantID(), sig)
+	// Map to LP request (Postman contract: merchantTxnId, amount, userDetails, source, returnUrl, emiPlans)
+	lpReq := &lpReq.LPCreateOrderRequest{
+		MerchantTxnID: input.MerchantTxnID,
+		Amount: lpCommon.LPAmount{
+			Value:    lpCommon.FormatAmount(input.Amount),
+			Currency: input.Currency,
+		},
+		UserDetails: lpCommon.NewLPUserDetails(input.Mobile, input.Email),
+		Source:      "website",
+		ReturnURL:   c.config.ReturnURL, // From config
+		EmiPlans:    lpEmiPlans,
+	}
 
 	// Marshal to JSON
 	jsonBody, err := json.Marshal(lpReq)
@@ -60,18 +89,16 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrde
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to marshal request: "+err.Error())
 	}
 
+	// Sign request (NO email in signature for orders)
+	sig := c.signer.SignOrder(input.MerchantTxnID, input.Amount)
+
 	// Build executor request
+	url := fmt.Sprintf("%s%s", c.config.BaseURL, lpConstants.PathCreateOrder)
 	execReq := executor.Request{
-		Method: http.MethodPost,
-		URL:    c.config.BaseURL + lpConstants.PathCreateOrder,
-		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:     c.config.AccessKey,
-			lpConstants.HeaderSignature:     sig,
-			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
-			lpConstants.HeaderPlatform:      rc.Platform,
-			lpConstants.HeaderUserIPAddress: rc.UserIP,
-		},
-		Body: bytes.NewReader(jsonBody),
+		Method:  http.MethodPost,
+		URL:     url,
+		Headers: headersWithDevice(c.config.AccessKey, sig, rc),
+		Body:    bytes.NewReader(jsonBody),
 	}
 
 	// Log request
@@ -98,20 +125,27 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, req orderReq.CreateOrde
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response
-	return mapper.FromLPOrderResponse(&lpResp, req.PaymentID), nil
+	// Map to canonical response (paymentID not available here, set by service layer)
+	return &orderResp.OrderResponse{
+		PaymentID:     "", // Set by service layer
+		Status:        lpResp.Status,
+		LenderOrderID: &lpResp.OrderID,
+		RedirectURL:   &lpResp.RedirectURL,
+		ErrorCode:     nil, // Not in LP response
+		ErrorMessage:  nil, // Not in LP response
+	}, nil
 }
 
 // GetOrderStatus implements OrderGateway.GetOrderStatus
-func (c *PaymentClient) GetOrderStatus(ctx context.Context, paymentID string) (*orderResp.OrderStatusResponse, error) {
+func (c *PaymentClient) GetOrderStatus(ctx context.Context, merchantTxnID string) (*orderResp.OrderStatusResponse, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
 	// Build URL with query params
-	url := fmt.Sprintf("%s%s?merchantTxnId=%s", c.config.BaseURL, lpConstants.PathOrderEnquiry, paymentID)
+	url := fmt.Sprintf("%s%s?merchantTxnId=%s", c.config.BaseURL, lpConstants.PathOrderEnquiry, merchantTxnID)
 
 	// Sign request for enquiry
-	sig := c.signer.SignEnquiry(paymentID)
+	sig := c.signer.SignEnquiry(merchantTxnID)
 
 	// Build executor request
 	execReq := executor.Request{
@@ -154,7 +188,7 @@ func (c *PaymentClient) GetOrderStatus(ctx context.Context, paymentID string) (*
 	// Map to canonical response
 	lenderOrderID := lpResp.OrderID
 	return &orderResp.OrderStatusResponse{
-		PaymentID:     paymentID,
+		PaymentID:     "", // Set by service layer (looked up from merchantTxnID)
 		UserID:        "", // Not in LP response
 		MerchantID:    "", // Not in LP response
 		Amount:        0,  // Not in LP response

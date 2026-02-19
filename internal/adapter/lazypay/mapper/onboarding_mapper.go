@@ -1,87 +1,39 @@
 package mapper
 
 import (
-	onbReq "lending-hub-service/internal/domain/onboarding/dto/request"
-	onbResp "lending-hub-service/internal/domain/onboarding/dto/response"
 	lpCommon "lending-hub-service/internal/adapter/lazypay/dto/common"
 	lpReq "lending-hub-service/internal/adapter/lazypay/dto/request"
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
+	onbResp "lending-hub-service/internal/domain/onboarding/dto/response"
 )
 
-// ToLPOnboardingRequest converts canonical StartOnboardingRequest → LP format
-func ToLPOnboardingRequest(
-	req onbReq.StartOnboardingRequest,
-	accessKey, merchantID string,
-) *lpReq.LPOnboardingRequest {
-	lpReq := &lpReq.LPOnboardingRequest{
-		AccessKey:     accessKey,
-		MerchantID:    merchantID,
-		MerchantTxnID: req.OnboardingTxnID,
-		User: lpCommon.LPUserDetails{
-			Mobile:    req.UserContact.Mobile,
-			Email:     req.UserContact.Email,
-			FirstName: "", // Not in canonical request
-			LastName:  "", // Not in canonical request
+// OnboardingMapper maps between canonical and Lazypay onboarding formats
+type OnboardingMapper struct {
+	cfg *OnboardingMapperConfig
+}
+
+// OnboardingMapperConfig holds config needed for mapping
+type OnboardingMapperConfig struct {
+	SubMerchantID string
+	ReturnURL     string
+}
+
+// NewOnboardingMapper creates a new onboarding mapper
+func NewOnboardingMapper(cfg *OnboardingMapperConfig) *OnboardingMapper {
+	return &OnboardingMapper{cfg: cfg}
+}
+
+// ToLPRequest converts canonical onboarding input → LP format
+// Postman contract: { customParams: { subMerchantId }, userDetails: { mobile, email }, returnUrl, source }
+func (m *OnboardingMapper) ToLPRequest(mobile, email string) *lpReq.LPOnboardingRequest {
+	return &lpReq.LPOnboardingRequest{
+		CustomParams: lpCommon.LPCustomParams{
+			SubMerchantID: m.cfg.SubMerchantID,
 		},
-		ReturnURL:     req.ReturnURL,
-		Channel:       req.ChannelID,
-		BureauConsent: req.KYCSnapshot.BureauPullConsent,
+		UserDetails: lpCommon.NewLPUserDetails(mobile, email),
+		ReturnURL:   m.cfg.ReturnURL,
+		Source:      "website",
 	}
-
-	// Map address if provided
-	if req.Address.Street1 != "" {
-		lpReq.Address = &lpCommon.LPAddress{
-			Street1:       req.Address.Street1,
-			Street2:       req.Address.Street2,
-			City:          req.Address.City,
-			State:         req.Address.State,
-			Country:       req.Address.Country,
-			Zip:           req.Address.Zip,
-			Landmark:      req.Address.Landmark,
-			ResidenceType: req.Address.ResidenceType,
-		}
-	}
-
-	// Map KYC fields
-	if req.KYCSnapshot.PAN != "" {
-		lpReq.PAN = req.KYCSnapshot.PAN
-	}
-	if req.KYCSnapshot.Gender != "" {
-		lpReq.Gender = req.KYCSnapshot.Gender
-	}
-	if req.KYCSnapshot.DOB != "" {
-		lpReq.DOB = req.KYCSnapshot.DOB
-	}
-	if req.KYCSnapshot.FullLegalName != "" {
-		lpReq.FullLegalName = req.KYCSnapshot.FullLegalName
-	}
-	if req.KYCSnapshot.FatherName != "" {
-		lpReq.FatherName = req.KYCSnapshot.FatherName
-	}
-	if req.KYCSnapshot.EducationalQualification != "" {
-		lpReq.Education = req.KYCSnapshot.EducationalQualification
-	}
-
-	// Map employment details
-	if req.KYCSnapshot.EmploymentDetails.Type != "" {
-		lpReq.EmploymentType = req.KYCSnapshot.EmploymentDetails.Type
-	}
-	if req.KYCSnapshot.EmploymentDetails.MonthlySalary > 0 {
-		lpReq.MonthlySalary = req.KYCSnapshot.EmploymentDetails.MonthlySalary
-	}
-	if req.KYCSnapshot.EmploymentDetails.CompanyName != "" {
-		lpReq.CompanyName = req.KYCSnapshot.EmploymentDetails.CompanyName
-	}
-	if req.KYCSnapshot.EmploymentDetails.CompanyType != "" {
-		lpReq.CompanyType = req.KYCSnapshot.EmploymentDetails.CompanyType
-	}
-
-	// Map marital status
-	if req.KYCSnapshot.MaritalStatus {
-		lpReq.MaritalStatus = true
-	}
-
-	return lpReq
 }
 
 // FromLPOnboardingResponse converts LP response → canonical OnboardingResponse

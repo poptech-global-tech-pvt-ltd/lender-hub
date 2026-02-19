@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	req "lending-hub-service/internal/domain/order/dto/request"
 	res "lending-hub-service/internal/domain/order/dto/response"
 	"lending-hub-service/internal/domain/order/port"
 )
@@ -18,17 +17,32 @@ func NewStubOrderGateway() port.OrderGateway {
 }
 
 // CreateOrder returns a fake order response with PENDING status
-func (g *StubOrderGateway) CreateOrder(ctx context.Context, req req.CreateOrderRequest) (*res.OrderResponse, error) {
+func (g *StubOrderGateway) CreateOrder(ctx context.Context, input port.OrderInput) (*res.OrderResponse, error) {
 	// Generate a fake lender order ID
-	lenderOrderID := fmt.Sprintf("LP-ORDER-%s", req.PaymentID)
+	lenderOrderID := fmt.Sprintf("LP-ORDER-%s", input.MerchantTxnID)
 
 	// Return fake redirect URL
-	redirectURL := fmt.Sprintf("https://stub.lazypay.in/payment/%s?returnUrl=%s", lenderOrderID, req.ReturnURL)
+	redirectURL := fmt.Sprintf("https://stub.lazypay.in/payment/%s", lenderOrderID)
 
 	return &res.OrderResponse{
-		PaymentID:     req.PaymentID,
+		PaymentID:     "", // Set by service layer
 		Status:        "PENDING",
 		LenderOrderID: &lenderOrderID,
 		RedirectURL:   &redirectURL,
+	}, nil
+}
+
+// GetOrderStatus implements OrderGateway.GetOrderStatus
+func (g *StubOrderGateway) GetOrderStatus(ctx context.Context, merchantTxnID string) (*res.OrderStatusResponse, error) {
+	return &res.OrderStatusResponse{
+		PaymentID:     "", // Set by service layer
+		UserID:        "stub-user",
+		MerchantID:    "",
+		Status:        "SUCCESS",
+		LenderOrderID: &merchantTxnID,
+		Amount:        0,
+		Currency:      "INR",
+		CreatedAt:     "",
+		UpdatedAt:     "",
 	}, nil
 }

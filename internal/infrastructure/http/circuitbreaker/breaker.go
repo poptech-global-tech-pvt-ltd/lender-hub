@@ -6,24 +6,21 @@ import (
 	"time"
 )
 
+//TODO add event level observality to revire
+
 // State represents the circuit breaker state
-type State int
+type State int   //todo make it better 
 
 const (
-	// StateClosed is the normal operating state
 	StateClosed State = iota
-	// StateOpen means the circuit is failing and rejecting requests
 	StateOpen
-	// StateHalfOpen is the probing state to test recovery
 	StateHalfOpen
 )
 
 var (
-	// ErrCircuitOpen is returned when circuit breaker is open
-	ErrCircuitOpen = errors.New("circuit breaker is open")
+	ErrCircuitOpen = errors.New("circuit breaker is open request not allowed")
 )
 
-// CircuitBreaker implements a circuit breaker pattern
 type CircuitBreaker struct {
 	mu               sync.Mutex
 	config           CircuitBreakerConfig
@@ -34,7 +31,6 @@ type CircuitBreaker struct {
 	halfOpenAttempts int
 }
 
-// New creates a new circuit breaker with the given config
 func New(cfg CircuitBreakerConfig) *CircuitBreaker {
 	return &CircuitBreaker{
 		config:           cfg,

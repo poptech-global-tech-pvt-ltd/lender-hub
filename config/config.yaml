@@ -24,6 +24,7 @@ lazypay:
   secret_key: "49165512a4d220c580175223711c49dc68ab7cdf"
   merchant_id: ""  # Optional - leave empty if you only have subMerchantId
   sub_merchant_id: "YOUR_SUB_MERCHANT_ID"  # Replace with your actual subMerchantId
+  return_url: "https://yourapp.test/lazypay/callback"  # Callback URL for redirects
   profile_timeout: 10s
   payment_timeout: 5s
   enabled: false
@@ -43,3 +44,7 @@ kafka:
   profile_topic: "lending-hub.profile.events"
   order_topic: "lending-hub.order.events"
   refund_topic: "lending-hub.refund.events"
+
+userProfileService:
+  baseURL: "https://userprofile-sit.popclub.co.in"
+  timeout: "5s"

@@ -12,7 +12,6 @@ import (
 	"lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
-	profileReq "lending-hub-service/internal/domain/profile/dto/request"
 	profileResp "lending-hub-service/internal/domain/profile/dto/response"
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
@@ -26,6 +25,7 @@ type ProfileClient struct {
 	signer   *signature.SignatureService
 	executor executor.HttpExecutor
 	logger   *baseLogger.Logger
+	mapper   *mapper.ProfileMapper
 }
 
 // NewProfileClient creates a new ProfileClient
@@ -40,19 +40,17 @@ func NewProfileClient(
 		signer:   signer,
 		executor: exec,
 		logger:   logger,
+		mapper:   mapper.NewProfileMapper(),
 	}
 }
 
 // CheckEligibility implements ProfileGateway.CheckEligibility
-func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.CustomerStatusRequest) (*profileResp.CustomerStatusResponse, error) {
+func (c *ProfileClient) CheckEligibility(ctx context.Context, mobile, email string, amount float64) (*profileResp.EligibilityResponse, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
-	// Sign request
-	sig := c.signer.SignEligibility(req.Mobile, req.Email, 0) // amount 0 for discovery
-
-	// Map to LP request (use GetMerchantID() which falls back to SubMerchantID)
-	lpReq := mapper.ToLPEligibilityRequest(req, c.config.AccessKey, c.config.GetMerchantID(), sig)
+	// Map to LP request (Postman contract: userDetails, amount, source)
+	lpReq := c.mapper.ToLPEligibilityRequest(mobile, email, amount)
 
 	// Marshal to JSON
 	jsonBody, err := json.Marshal(lpReq)
@@ -60,18 +58,16 @@ func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.Cus
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to marshal request: "+err.Error())
 	}
 
+	// Sign request (email conditionally included in signature)
+	sig := c.signer.SignEligibility(mobile, email, amount)
+
 	// Build executor request
+	url := fmt.Sprintf("%s%s", c.config.BaseURL, lpConstants.PathEligibility)
 	execReq := executor.Request{
-		Method: http.MethodPost,
-		URL:    c.config.BaseURL + lpConstants.PathEligibility,
-		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:     c.config.AccessKey,
-			lpConstants.HeaderSignature:     sig,
-			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
-			lpConstants.HeaderPlatform:      rc.Platform,
-			lpConstants.HeaderUserIPAddress: rc.UserIP,
-		},
-		Body: bytes.NewReader(jsonBody),
+		Method:  http.MethodPost,
+		URL:     url,
+		Headers: headersWithDevice(c.config.AccessKey, sig, rc),
+		Body:    bytes.NewReader(jsonBody),
 	}
 
 	// Log request
@@ -89,7 +85,7 @@ func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.Cus
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
-		return c.handleErrorResponse(resp.Body)
+		return nil, c.handleProfileAPIError(resp.Body)
 	}
 
 	// Unmarshal response
@@ -98,37 +94,36 @@ func (c *ProfileClient) CheckEligibility(ctx context.Context, req profileReq.Cus
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response
-	return mapper.FromLPEligibilityResponse(&lpResp, req.UserID), nil
+	// Map to canonical response (userID set by service layer)
+	return mapper.FromLPEligibilityResponse(&lpResp, ""), nil
 }
 
 // GetCustomerStatus implements ProfileGateway.GetCustomerStatus
-func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile string) (*profileResp.CustomerStatusResponse, error) {
+func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile, email string) (*profileResp.CustomerStatusResponse, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
 	// Sign request
 	sig := c.signer.SignCustomerStatus(mobile)
 
-	// Build URL with query params
-	url := fmt.Sprintf("%s%s?mobile=%s", c.config.BaseURL, lpConstants.PathCustomerStatus, mobile)
+	// Build URL with query params (Postman: mobile and merchantId)
+	url := fmt.Sprintf("%s%s?mobile=%s&merchantId=%s",
+		c.config.BaseURL, lpConstants.PathCustomerStatus, mobile, c.config.SubMerchantID)
+
+	// Build body (Postman: GET with body { userDetails: { mobile, email } })
+	body := c.mapper.ToLPCustomerStatusRequest(mobile, email)
+	bodyBytes, _ := json.Marshal(body)
 
 	// Build executor request
 	execReq := executor.Request{
-		Method: http.MethodGet,
-		URL:    url,
-		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:     c.config.AccessKey,
-			lpConstants.HeaderSignature:     sig,
-			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
-			lpConstants.HeaderPlatform:      rc.Platform,
-			lpConstants.HeaderUserIPAddress: rc.UserIP,
-		},
-		Body: nil,
+		Method:  http.MethodGet,
+		URL:     url,
+		Headers: headersWithoutDevice(c.config.AccessKey, sig, rc), // NO deviceId
+		Body:    bytes.NewReader(bodyBytes),                        // GET with body
 	}
 
 	// Log request
-	c.logRequest(ctx, execReq.Method, execReq.URL, execReq.Headers, nil)
+	c.logRequest(ctx, execReq.Method, execReq.URL, execReq.Headers, bodyBytes)
 
 	// Execute request
 	resp, err := c.executor.Do(ctx, execReq)
@@ -142,30 +137,30 @@ func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile string) (*
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
-		return c.handleErrorResponse(resp.Body)
+		return nil, c.handleProfileAPIError(resp.Body)
 	}
 
-	// Unmarshal response
-	var lpResp response.LPEligibilityResponse
+	// Unmarshal response (Customer Status API has different shape than Eligibility)
+	var lpResp response.LPCustomerStatusResponse
 	if err := json.Unmarshal(resp.Body, &lpResp); err != nil {
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response (userID not available, use empty string)
-	return mapper.FromLPEligibilityResponse(&lpResp, ""), nil
+	// Map to canonical response (userID set by service layer)
+	return mapper.FromLPCustomerStatusResponse(&lpResp, ""), nil
 }
 
-// handleErrorResponse parses error response and returns DomainError
-func (c *ProfileClient) handleErrorResponse(body []byte) (*profileResp.CustomerStatusResponse, error) {
+// handleProfileAPIError parses LP error response and returns DomainError
+func (c *ProfileClient) handleProfileAPIError(body []byte) error {
 	// Try to parse LP error response
 	var lpError struct {
 		ErrorCode    string `json:"errorCode"`
 		ErrorMessage string `json:"errorMessage"`
 	}
 	if err := json.Unmarshal(body, &lpError); err == nil && lpError.ErrorCode != "" {
-		return nil, mapper.MapLPError(lpError.ErrorCode)
+		return mapper.MapLPError(lpError.ErrorCode)
 	}
-	return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "provider error")
+	return sharedErrors.New(sharedErrors.CodeInternalError, 500, "provider error")
 }
 
 // logRequest logs the outgoing Lazypay request

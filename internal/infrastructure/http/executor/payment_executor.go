@@ -48,7 +48,7 @@ func (e *paymentExecutor) Do(ctx context.Context, req Request) (*Response, error
 	// Check circuit breaker
 	allowed, err := e.breaker.AllowRequest()
 	if err != nil {
-		return nil, fmt.Errorf("circuit breaker: %w", err)
+		return nil, fmt.Errorf("circuit breaker reading error: %w", err)
 	}
 	if !allowed {
 		return nil, circuitbreaker.ErrCircuitOpen

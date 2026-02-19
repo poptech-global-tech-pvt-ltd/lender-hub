@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 
 	orderPort "lending-hub-service/internal/domain/order/port"
-	orderRepo "lending-hub-service/internal/domain/order/repository"
+	orderRepoPkg "lending-hub-service/internal/domain/order/repository"
 	"lending-hub-service/internal/domain/refund/handler"
 	refundPort "lending-hub-service/internal/domain/refund/port"
 	"lending-hub-service/internal/domain/refund/repository"
@@ -27,7 +27,8 @@ func NewModule(
 	profileUpdater *profileService.ProfileUpdater,
 ) *Module {
 	refundRepo := repository.NewRefundRepository(db)
-	svc := service.NewRefundService(refundRepo, orderRepo, gw, profileUpdater)
+	mappingRepo := orderRepoPkg.NewPaymentMappingRepository(db)
+	svc := service.NewRefundService(refundRepo, orderRepo, mappingRepo, gw, profileUpdater)
 	return &Module{
 		Service: svc,
 	}
@@ -36,7 +37,7 @@ func NewModule(
 // NewModuleWithStubs creates a new refund module with stub implementations
 func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater) *Module {
 	gw := stub.NewStubRefundGateway()
-	orderRepo := orderRepo.NewOrderRepository(db)
+	orderRepo := orderRepoPkg.NewOrderRepository(db)
 	return NewModule(db, gw, orderRepo, profileUpdater)
 }
 

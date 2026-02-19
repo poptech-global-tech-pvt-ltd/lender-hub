@@ -12,12 +12,12 @@ import (
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
-	refundReq "lending-hub-service/internal/domain/refund/dto/request"
 	refundResp "lending-hub-service/internal/domain/refund/dto/response"
 	refundPort "lending-hub-service/internal/domain/refund/port"
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	"lending-hub-service/pkg/idgen"
 	baseLogger "lending-hub-service/pkg/logger"
 )
 
@@ -27,6 +27,7 @@ type RefundClient struct {
 	signer   *signature.SignatureService
 	executor executor.HttpExecutor
 	logger   *baseLogger.Logger
+	mapper   *mapper.RefundMapper
 }
 
 // NewRefundClient creates a new RefundClient
@@ -35,45 +36,41 @@ func NewRefundClient(
 	signer *signature.SignatureService,
 	exec executor.HttpExecutor,
 	logger *baseLogger.Logger,
+	idgen *idgen.Generator,
 ) *RefundClient {
 	return &RefundClient{
 		config:   cfg,
 		signer:   signer,
 		executor: exec,
 		logger:   logger,
+		mapper:   mapper.NewRefundMapper(idgen),
 	}
 }
 
 // ProcessRefund implements RefundGateway.ProcessRefund
-func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRefundRequest) (*refundResp.RefundResponse, error) {
+func (c *RefundClient) ProcessRefund(ctx context.Context, merchantTxnID string, amount float64, currency string) (*refundResp.RefundResponse, string, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
-	// Sign request (using paymentId as merchantTxnId)
-	sig := c.signer.SignOrder(req.PaymentID, req.Amount) // Reuse order signature format
-
-	// Map to LP request
-	// Use GetMerchantID() which falls back to SubMerchantID
-	lpReq := mapper.ToLPRefundRequest(req, req.PaymentID, c.config.AccessKey, c.config.GetMerchantID(), sig)
+	// Map to LP request and generate refundTxnId (Postman contract: merchantTxnId, amount, refundTxnId)
+	lpReq, refundTxnID := c.mapper.ToLPRequest(merchantTxnID, amount, currency)
 
 	// Marshal to JSON
 	jsonBody, err := json.Marshal(lpReq)
 	if err != nil {
-		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to marshal request: "+err.Error())
+		return nil, "", sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to marshal request: "+err.Error())
 	}
 
+	// Sign request (NO email in signature for refunds)
+	sig := c.signer.SignRefund(merchantTxnID, amount)
+
 	// Build executor request
+	url := fmt.Sprintf("%s%s", c.config.BaseURL, lpConstants.PathRefund)
 	execReq := executor.Request{
-		Method: http.MethodPost,
-		URL:    c.config.BaseURL + lpConstants.PathRefund,
-		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:     c.config.AccessKey,
-			lpConstants.HeaderSignature:     sig,
-			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
-			lpConstants.HeaderPlatform:      rc.Platform,
-			lpConstants.HeaderUserIPAddress: rc.UserIP,
-		},
-		Body: bytes.NewReader(jsonBody),
+		Method:  http.MethodPost,
+		URL:     url,
+		Headers: headersWithDevice(c.config.AccessKey, sig, rc),
+		Body:    bytes.NewReader(jsonBody),
 	}
 
 	// Log request
@@ -83,7 +80,7 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRe
 	resp, err := c.executor.Do(ctx, execReq)
 	if err != nil {
 		logLazypayResponse(c.logger, ctx, execReq.URL, 0, nil, fmt.Errorf("executor error: %w", err))
-		return nil, fmt.Errorf("executor error: %w", err)
+		return nil, "", fmt.Errorf("executor error: %w", err)
 	}
 
 	// Log response
@@ -91,17 +88,18 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundReq.CreateRe
 
 	// Check for HTTP errors
 	if resp.StatusCode >= 400 {
-		return c.handleErrorResponse(resp.Body)
+		r, err := c.handleErrorResponse(resp.Body)
+		return r, "", err
 	}
 
 	// Unmarshal response
 	var lpResp lpResp.LPRefundResponse
 	if err := json.Unmarshal(resp.Body, &lpResp); err != nil {
-		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
+		return nil, "", sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response
-	return mapper.FromLPRefundResponse(&lpResp, req.RefundID, req.PaymentID, req.Amount, req.Currency), nil
+	// Map to canonical response (RefundID/PaymentID filled by service layer; gateway has no caller context)
+	return mapper.FromLPRefundResponse(&lpResp, "", "", amount, currency), refundTxnID, nil
 }
 
 // EnquireRefund implements RefundGateway.EnquireRefund
@@ -112,21 +110,15 @@ func (c *RefundClient) EnquireRefund(ctx context.Context, merchantTxnID string) 
 	// Generate signature for enquiry
 	sig := c.signer.SignEnquiry(merchantTxnID)
 
-	// Build URL with query param
-	url := fmt.Sprintf("%s/api/lazypay%s?merchantTxnId=%s", c.config.BaseURL, lpConstants.PathRefundEnquiry, merchantTxnID)
+	// Build URL with query param (Postman: merchantTxnId)
+	url := fmt.Sprintf("%s%s?merchantTxnId=%s", c.config.BaseURL, lpConstants.PathRefundEnquiry, merchantTxnID)
 
 	// Build executor request
 	execReq := executor.Request{
-		Method: http.MethodGet,
-		URL:    url,
-		Headers: map[string]string{
-			lpConstants.HeaderAccessKey:     c.config.AccessKey,
-			lpConstants.HeaderSignature:     sig,
-			lpConstants.HeaderContentType:   lpConstants.ContentTypeJSON,
-			lpConstants.HeaderPlatform:      rc.Platform,
-			lpConstants.HeaderUserIPAddress: rc.UserIP,
-		},
-		Body: nil,
+		Method:  http.MethodGet,
+		URL:     url,
+		Headers: headersWithoutDevice(c.config.AccessKey, sig, rc), // NO deviceId
+		Body:    nil,
 	}
 
 	// Log request

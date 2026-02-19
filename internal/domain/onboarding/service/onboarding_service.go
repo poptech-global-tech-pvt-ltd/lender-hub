@@ -16,12 +16,13 @@ import (
 
 // OnboardingService handles onboarding operations
 type OnboardingService struct {
-	repo           port.OnboardingRepository
-	eventStore     port.OnboardingEventStore
-	gateway        port.OnboardingGateway
-	profileUpdater *profileService.ProfileUpdater
-	processor      *EventProcessor
-	idgen          *idgen.Generator
+	repo            port.OnboardingRepository
+	eventStore      port.OnboardingEventStore
+	gateway         port.OnboardingGateway
+	profileUpdater  *profileService.ProfileUpdater
+	processor       *EventProcessor
+	idgen           *idgen.Generator
+	contactResolver *profileService.UserContactResolver
 }
 
 // NewOnboardingService creates a new OnboardingService
@@ -31,23 +32,32 @@ func NewOnboardingService(
 	gateway port.OnboardingGateway,
 	profileUpdater *profileService.ProfileUpdater,
 	idgen *idgen.Generator,
+	contactResolver *profileService.UserContactResolver,
 ) *OnboardingService {
 	return &OnboardingService{
-		repo:           repo,
-		eventStore:     eventStore,
-		gateway:        gateway,
-		profileUpdater: profileUpdater,
-		processor:      NewEventProcessor(),
-		idgen:          idgen,
+		repo:            repo,
+		eventStore:      eventStore,
+		gateway:         gateway,
+		profileUpdater:  profileUpdater,
+		processor:       NewEventProcessor(),
+		idgen:           idgen,
+		contactResolver: contactResolver,
 	}
 }
 
 // StartOnboarding initiates a new onboarding flow
 func (s *OnboardingService) StartOnboarding(ctx context.Context, req req.StartOnboardingRequest) (*res.OnboardingResponse, error) {
+	// Resolve user contact (mobile + email) from userId
+	contact, err := s.contactResolver.Resolve(ctx, req.UserID)
+	if err != nil {
+		return nil, sharedErrors.New(sharedErrors.CodeUserContactNotFound, 422, "Unable to resolve user contact details (mobile required)")
+	}
+
 	// Generate onboarding ID with ONB_ prefix
 	onboardingID := s.idgen.OnboardingID()
-	// Call gateway to start onboarding
-	gatewayResp, err := s.gateway.StartOnboarding(ctx, req)
+
+	// Call gateway to start onboarding (mobile, email resolved, merchantId/returnUrl from config)
+	gatewayResp, err := s.gateway.StartOnboarding(ctx, contact.Mobile, contact.Email)
 	if err != nil {
 		return nil, err
 	}
@@ -57,11 +67,11 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, req req.StartOn
 		OnboardingID:         onboardingID,
 		ProviderOnboardingID: &gatewayResp.OnboardingID,
 		UserID:               req.UserID,
-		MerchantID:           req.MerchantID,
+		MerchantID:           "",        // Not in request, from config
 		Provider:             "LAZYPAY", // TODO: make configurable
-		Mobile:               req.UserContact.Mobile,
+		Mobile:               contact.Mobile,
 		Source:               req.Source,
-		Channel:              &req.ChannelID,
+		Channel:              nil, // Derive from source if needed
 		Status:               entity.OnboardingPending,
 		IsRetryable:          false,
 		RetryCount:           0,
@@ -81,7 +91,7 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, req req.StartOn
 
 	return &res.OnboardingResponse{
 		OnboardingID:    onboardingID,
-		OnboardingTxnID: req.OnboardingTxnID,
+		OnboardingTxnID: onboardingID, // Use generated ID as txn ID
 		Provider:        onboarding.Provider,
 		RedirectURL:     gatewayResp.RedirectURL,
 		Status:          string(entity.OnboardingPending),

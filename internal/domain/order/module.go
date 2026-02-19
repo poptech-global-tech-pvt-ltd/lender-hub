@@ -25,22 +25,23 @@ func NewModule(
 	profileUpdater *profileService.ProfileUpdater,
 	publisher port.OrderEventPublisher,
 	idgen *idgen.Generator,
+	contactResolver *profileService.UserContactResolver,
 ) *Module {
 	orderRepo := repository.NewOrderRepository(db)
 	mappingRepo := repository.NewPaymentMappingRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	idempotencySvc := service.NewIdempotencyService(idempotencyRepo)
-	svc := service.NewOrderService(orderRepo, mappingRepo, idempotencySvc, gw, profileUpdater, publisher, idgen)
+	svc := service.NewOrderService(orderRepo, mappingRepo, idempotencySvc, gw, profileUpdater, publisher, idgen, contactResolver)
 	return &Module{
 		Service: svc,
 	}
 }
 
 // NewModuleWithStubs creates a new order module with stub implementations
-func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator) *Module {
+func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator, contactResolver *profileService.UserContactResolver) *Module {
 	gw := stub.NewStubOrderGateway()
 	publisher := stub.NewStubOrderEventPublisher()
-	return NewModule(db, gw, profileUpdater, publisher, idgen)
+	return NewModule(db, gw, profileUpdater, publisher, idgen, contactResolver)
 }
 
 // RegisterRoutes registers order module routes

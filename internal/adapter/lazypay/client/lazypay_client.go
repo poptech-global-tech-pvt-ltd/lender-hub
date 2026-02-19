@@ -8,6 +8,7 @@ import (
 	profilePort "lending-hub-service/internal/domain/profile/port"
 	refundPort "lending-hub-service/internal/domain/refund/port"
 	"lending-hub-service/internal/infrastructure/http/executor"
+	"lending-hub-service/pkg/idgen"
 	baseLogger "lending-hub-service/pkg/logger"
 )
 
@@ -29,6 +30,7 @@ func NewLazypayClient(
 	profileExec executor.HttpExecutor,
 	paymentExec executor.HttpExecutor,
 	logger *baseLogger.Logger,
+	idgen *idgen.Generator,
 ) *LazypayClient {
 	signer := signature.NewSignatureService(cfg.AccessKey, cfg.SecretKey)
 	c := &LazypayClient{
@@ -40,7 +42,7 @@ func NewLazypayClient(
 	c.profile = NewProfileClient(cfg, signer, profileExec, logger)
 	c.onboarding = NewOnboardingClient(cfg, signer, profileExec, logger)
 	c.payment = NewPaymentClient(cfg, signer, paymentExec, logger)
-	c.refund = NewRefundClient(cfg, signer, paymentExec, logger)
+	c.refund = NewRefundClient(cfg, signer, paymentExec, logger, idgen)
 	return c
 }
 
