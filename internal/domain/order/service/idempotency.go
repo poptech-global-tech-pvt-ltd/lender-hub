@@ -77,16 +77,34 @@ func (s *IdempotencyService) Fail(ctx context.Context, paymentID string) error {
 	return s.repo.MarkFailed(ctx, paymentID)
 }
 
-// ComputeHash computes SHA256 hash of the request
+// ComputeHash computes SHA256 hash of the request (for idempotency when paymentId is server-generated)
+// Hashes only idempotency-relevant fields; PaymentID is ignored
 func (s *IdempotencyService) ComputeHash(req req.CreateOrderRequest) string {
-	// Marshal request to JSON
-	jsonBytes, err := json.Marshal(req)
-	if err != nil {
-		// Fallback: use paymentID as hash if marshaling fails
-		return req.PaymentID
+	tenure := req.EMIPlan.Tenure
+	if tenure == 0 && req.EmiSelection != nil {
+		tenure = req.EmiSelection.Tenure
 	}
-
-	// Compute SHA256
+	canonical := struct {
+		UserID    string  `json:"userId"`
+		MerchantID string  `json:"merchantId"`
+		Amount    float64 `json:"amount"`
+		Currency  string  `json:"currency"`
+		Source    string  `json:"source"`
+		ReturnURL string  `json:"returnUrl"`
+		Tenure    int     `json:"tenure"`
+	}{
+		UserID:    req.UserID,
+		MerchantID: req.MerchantID,
+		Amount:    req.Amount,
+		Currency:  req.Currency,
+		Source:    req.Source,
+		ReturnURL: req.ReturnURL,
+		Tenure:    tenure,
+	}
+	jsonBytes, err := json.Marshal(canonical)
+	if err != nil {
+		return ""
+	}
 	hash := sha256.Sum256(jsonBytes)
 	return hex.EncodeToString(hash[:])
 }

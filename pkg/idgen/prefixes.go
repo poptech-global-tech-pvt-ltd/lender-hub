@@ -1,9 +1,9 @@
 package idgen
 
 const (
-	PrefixPayment    = "PAY" // payment/order id
-	PrefixRefund     = "REF" // refund id
-	PrefixOnboarding = "ONB" // onboarding id
+	PrefixPayment    = "lps" // lenderpaymentstate — primary order identifier
+	PrefixRefund     = "ref" // refund id
+	PrefixOnboarding = "onb" // onboarding id
 
 	PrefixRequest     = "REQ" // request correlation id
 	PrefixWebhook     = "WBH" // webhook event id

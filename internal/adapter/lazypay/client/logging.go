@@ -13,6 +13,9 @@ import (
 
 // logRequest logs the outgoing Lazypay request
 func logLazypayRequest(logger *baseLogger.Logger, ctx context.Context, method, url string, headers map[string]string, body []byte) {
+	if logger == nil {
+		return
+	}
 	rc := sharedContext.FromContext(ctx)
 
 	// Mask sensitive headers
@@ -40,6 +43,9 @@ func logLazypayRequest(logger *baseLogger.Logger, ctx context.Context, method, u
 
 // logResponse logs the incoming Lazypay response
 func logLazypayResponse(logger *baseLogger.Logger, ctx context.Context, url string, statusCode int, body []byte, err error) {
+	if logger == nil {
+		return
+	}
 	rc := sharedContext.FromContext(ctx)
 
 	if err != nil {

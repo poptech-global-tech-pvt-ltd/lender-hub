@@ -16,6 +16,7 @@ type Config struct {
 	Redis              RedisConfig              `mapstructure:"redis"`
 	Kafka              KafkaConfig              `mapstructure:"kafka"`
 	UserProfileService UserProfileServiceConfig `mapstructure:"userProfileService"`
+	InternalAPIToken   string                   `mapstructure:"internal_api_token"` // For support endpoints (PATCH order status)
 }
 
 // HTTPConfig defines HTTP server settings

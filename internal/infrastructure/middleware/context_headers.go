@@ -48,10 +48,10 @@ func ContextHeaders(skipPaths map[string]bool) gin.HandlerFunc {
 			return
 		}
 
-		requestID, _ := c.Get("requestId")
+		requestID, _ := c.Get("request_id") // same key as shared/middleware.RequestID
 		requestIDStr := ""
 		if requestID != nil {
-			requestIDStr = requestID.(string)
+			requestIDStr, _ = requestID.(string)
 		}
 		rc := &reqctx.RequestContext{
 			RequestID: requestIDStr,

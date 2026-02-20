@@ -71,6 +71,42 @@ func (r *postgresOrderRepository) Update(ctx context.Context, order *entity.Orde
 		Updates(&model).Error
 }
 
+// ListByUserID lists orders by user with optional merchant and status filters
+func (r *postgresOrderRepository) ListByUserID(ctx context.Context, userID, merchantID, status string, page, perPage int) ([]*entity.Order, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 || perPage > 100 {
+		perPage = 20
+	}
+	offset := (page - 1) * perPage
+
+	q := r.db.WithContext(ctx).Model(&infra.LenderPaymentState{}).Where("user_id = ?", userID)
+	if merchantID != "" {
+		q = q.Where("merchant_id = ?", merchantID)
+	}
+	if status != "" {
+		q = q.Where("status = ?", status)
+	}
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var models []infra.LenderPaymentState
+	err := q.Order("created_at DESC").Limit(perPage).Offset(offset).Find(&models).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	orders := make([]*entity.Order, len(models))
+	for i := range models {
+		orders[i] = toOrderEntity(&models[i])
+	}
+	return orders, int(total), nil
+}
+
 // postgresPaymentMappingRepository implements PaymentMappingRepository using GORM
 type postgresPaymentMappingRepository struct {
 	db *gorm.DB

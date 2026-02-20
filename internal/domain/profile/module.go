@@ -17,8 +17,6 @@ import (
 type Module struct {
 	Service                service.ProfileService
 	Updater                *service.ProfileUpdater
-	eligibilityHandler     *handler.EligibilityHandler
-	customerStatusHandler  *handler.CustomerStatusHandler
 	combinedProfileHandler *handler.CombinedProfileHandler
 }
 
@@ -38,8 +36,6 @@ func NewModule(
 	return &Module{
 		Service:                svc,
 		Updater:                updater,
-		eligibilityHandler:     handler.NewEligibilityHandler(svc),
-		customerStatusHandler:  handler.NewCustomerStatusHandler(svc),
 		combinedProfileHandler: handler.NewCombinedProfileHandler(svc),
 	}
 }
@@ -51,9 +47,10 @@ func NewModuleWithStubs(db *gorm.DB, contactResolver *service.UserContactResolve
 	return NewModule(db, gw, publisher, contactResolver, profileClient, logger)
 }
 
-// RegisterRoutes registers profile module routes
+// RegisterRoutes registers profile module routes.
+// Single GET profile API: userId (path), source (required query), amount (optional), currency (optional, default INR).
+// - Without amount: returns customer status only (Lazypay Customer Status API).
+// - With amount: returns combined profile (Customer Status + Eligibility / EMI plans).
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
-	rg.POST("/eligibility", m.eligibilityHandler.Handle)
-	rg.POST("/customer-status", m.customerStatusHandler.Handle)
 	rg.GET("/profile/:userId", m.combinedProfileHandler.Handle)
 }

@@ -24,6 +24,7 @@ type OrderService struct {
 	publisher       port.OrderEventPublisher
 	idgen           *idgen.Generator
 	contactResolver *profileService.UserContactResolver
+	merchantID      string // from config (subMerchantId), for DB NOT NULL
 }
 
 // NewOrderService creates a new OrderService
@@ -36,7 +37,11 @@ func NewOrderService(
 	publisher port.OrderEventPublisher,
 	idgen *idgen.Generator,
 	contactResolver *profileService.UserContactResolver,
+	merchantID string,
 ) *OrderService {
+	if merchantID == "" {
+		merchantID = "DEFAULT"
+	}
 	return &OrderService{
 		orderRepo:       orderRepo,
 		mappingRepo:     mappingRepo,
@@ -46,30 +51,45 @@ func NewOrderService(
 		publisher:       publisher,
 		idgen:           idgen,
 		contactResolver: contactResolver,
+		merchantID:      merchantID,
 	}
 }
 
 // CreateOrder creates a new order with idempotency
 func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderRequest) (*res.OrderResponse, error) {
-	// Generate payment ID if not provided
-	paymentID := req.PaymentID
-	if paymentID == "" {
-		paymentID = s.idgen.PaymentID()
+	// Payment ID is ALWAYS server-generated — never from caller
+	paymentID := s.idgen.PaymentID()
+
+	// MerchantID and Source: use request or defaults
+	merchantID := req.MerchantID
+	if merchantID == "" {
+		merchantID = s.merchantID
+	}
+	source := req.Source
+	if source == "" {
+		source = "CHECKOUT"
 	}
 
-	// Compute request hash
-	requestHash := s.idempotency.ComputeHash(req)
+	// EMI tenure: EMIPlan.Tenure or legacy EmiSelection.Tenure
+	tenure := req.EMIPlan.Tenure
+	if tenure == 0 && req.EmiSelection != nil {
+		tenure = req.EmiSelection.Tenure
+	}
+	if tenure == 0 {
+		return nil, sharedErrors.New(sharedErrors.CodeInvalidRequest, 400, "emiPlan.tenure or emiSelection.tenure required")
+	}
 
-	// Acquire idempotency key
-	result, key, err := s.idempotency.Acquire(ctx, paymentID, requestHash)
+	// Idempotency key = request hash (duplicate requests return cached response)
+	requestHash := s.idempotency.ComputeHash(req)
+	idempotencyKey := requestHash
+
+	result, key, err := s.idempotency.Acquire(ctx, idempotencyKey, requestHash)
 	if err != nil {
 		return nil, err
 	}
 
-	// Handle idempotency results
 	switch result {
 	case IdempotencyDuplicate:
-		// Return cached response
 		var cachedResponse res.OrderResponse
 		if err := json.Unmarshal(key.ResponsePayload, &cachedResponse); err != nil {
 			return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal cached response")
@@ -80,33 +100,34 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		return nil, sharedErrors.New(sharedErrors.CodeIdempotencyConflict, 409, "order creation already in progress")
 
 	case IdempotencyMismatch:
-		return nil, sharedErrors.New(sharedErrors.CodeHashMismatch, 422, "request hash mismatch: same paymentId with different request body")
+		return nil, sharedErrors.New(sharedErrors.CodeHashMismatch, 422, "request hash mismatch: same idempotency key with different request body")
 
 	case IdempotencyNew:
-		// Proceed with order creation
 		break
 	}
 
 	// Resolve user contact (mobile + email) from userId
 	contact, err := s.contactResolver.Resolve(ctx, req.UserID)
 	if err != nil {
-		s.idempotency.Fail(ctx, paymentID)
+		s.idempotency.Fail(ctx, idempotencyKey)
 		return nil, sharedErrors.New(sharedErrors.CodeUserContactNotFound, 422, "Unable to resolve user contact details (mobile required)")
 	}
 
-	// Generate merchantTxnId internally (mapped to caller's paymentId)
 	merchantTxnID := s.idgen.MerchantTxnID()
 
-	// Build EMI plans from req.EmiSelection (for now, single plan)
-	// TODO: In production, fetch full EMI plans from eligibility cache
+	// Build EMI plans (single plan from tenure)
+	emiType := "PAY_IN_PARTS"
+	if req.EmiSelection != nil {
+		emiType = req.EmiSelection.Type
+	}
 	emiPlans := []port.LPEmiPlan{
 		{
-			Tenure:                   req.EmiSelection.Tenure,
-			Type:                     req.EmiSelection.Type,
-			Emi:                      0, // Not in simplified EmiSelection
-			TotalPayableAmount:       0, // Not in simplified EmiSelection
-			InterestRate:             0, // Not in simplified EmiSelection
-			Principal:                0, // Not in simplified EmiSelection
+			Tenure:                   tenure,
+			Type:                     emiType,
+			Emi:                      0,
+			TotalPayableAmount:       0,
+			InterestRate:             0,
+			Principal:                0,
 			TotalInterestAmount:      0,
 			TotalProcessingFee:       0,
 			ProcessingFeeGst:         0,
@@ -117,7 +138,6 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		},
 	}
 
-	// Use returnUrl from request if provided, otherwise from config (handled in gateway)
 	returnURL := req.ReturnURL
 
 	// Call gateway to create order
@@ -130,87 +150,93 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		EmiPlans:      emiPlans,
 	})
 	if err != nil {
-		// Mark idempotency as failed
-		s.idempotency.Fail(ctx, paymentID)
+		s.idempotency.Fail(ctx, idempotencyKey)
 		return nil, err
 	}
 
-	// Serialize EMI selection
-	emiPlanBytes, _ := json.Marshal(req.EmiSelection)
+	// Status: always PENDING on create (gateway may return empty/INITIATED)
+	orderStatus := entity.OrderPending
+	switch entity.OrderStatus(gatewayResp.Status) {
+	case entity.OrderSuccess, entity.OrderFailed, entity.OrderRefunded, entity.OrderExpired, entity.OrderCancelled:
+		orderStatus = entity.OrderStatus(gatewayResp.Status)
+	case entity.OrderPending:
+		orderStatus = entity.OrderPending
+	default:
+		orderStatus = entity.OrderPending
+	}
 
-	// Create order entity
+	lenderOrderIDPtr := (*string)(nil)
+	if gatewayResp.LenderOrderID != "" {
+		s := gatewayResp.LenderOrderID
+		lenderOrderIDPtr = &s
+	}
+
+	emiPlanBytes, _ := json.Marshal(map[string]interface{}{"tenure": tenure, "type": emiType})
 	order := &entity.Order{
 		PaymentID:           paymentID,
 		UserID:              req.UserID,
-		MerchantID:          "", // From config, not in request
-		Lender:              "LAZYPAY", // TODO: make configurable
+		MerchantID:          merchantID,
+		Lender:              "LAZYPAY",
 		Amount:              req.Amount,
 		Currency:            req.Currency,
-		Status:              entity.OrderStatus(gatewayResp.Status),
+		Status:              orderStatus,
+		Source:              &source,
 		ReturnURL:           &returnURL,
 		EMIPlan:             emiPlanBytes,
-		LenderOrderID:       gatewayResp.LenderOrderID,
-		LenderMerchantTxnID: &merchantTxnID, // Our generated merchantTxnId
+		LenderOrderID:       lenderOrderIDPtr,
+		LenderMerchantTxnID: &merchantTxnID,
 		LastErrorCode:       gatewayResp.ErrorCode,
 		LastErrorMessage:    gatewayResp.ErrorMessage,
 		CreatedAt:           time.Now().UTC(),
 		UpdatedAt:           time.Now().UTC(),
 	}
 
-	// Persist order
 	if err := s.orderRepo.Create(ctx, order); err != nil {
-		s.idempotency.Fail(ctx, paymentID)
+		s.idempotency.Fail(ctx, idempotencyKey)
 		return nil, err
 	}
 
-	// Refresh user contact on successful order creation (optional - data may have updated)
 	if gatewayResp.Status == "SUCCESS" || gatewayResp.Status == "PENDING" {
 		_, _ = s.contactResolver.RefreshFromSource(ctx, req.UserID, "ORDER")
 	}
 
-	// Create payment mapping: paymentId (caller's) → merchantTxnId (our generated)
 	mapping := &entity.PaymentMapping{
-		PaymentID:           paymentID,      // Caller's idempotency key
+		PaymentID:           paymentID,
 		UserID:              req.UserID,
 		Lender:              order.Lender,
-		LenderMerchantTxnID: merchantTxnID, // Our generated merchantTxnId sent to Lazypay
-		LenderOrderID:       gatewayResp.LenderOrderID,
+		LenderMerchantTxnID: merchantTxnID,
+		LenderOrderID:       lenderOrderIDPtr,
 		CreatedAt:           time.Now().UTC(),
 		UpdatedAt:           time.Now().UTC(),
 	}
-	if err := s.mappingRepo.Create(ctx, mapping); err != nil {
-		// Log error but don't fail the request
-	}
+	_ = s.mappingRepo.Create(ctx, mapping)
 
-	// Build response
+	// Build response — status always "PENDING" on create
 	response := &res.OrderResponse{
 		PaymentID:     paymentID,
-		Status:        gatewayResp.Status,
+		Status:        "PENDING",
 		LenderOrderID: gatewayResp.LenderOrderID,
 		RedirectURL:   gatewayResp.RedirectURL,
+		Amount:        order.Amount,
+		Currency:      order.Currency,
+		CreatedAt:     order.CreatedAt,
 		ErrorCode:     gatewayResp.ErrorCode,
 		ErrorMessage:  gatewayResp.ErrorMessage,
 	}
 
-	// Marshal response for idempotency cache
 	responseBytes, _ := json.Marshal(response)
+	_ = s.idempotency.Complete(ctx, idempotencyKey, responseBytes, lenderOrderIDPtr)
 
-	// Mark idempotency as completed
-	if err := s.idempotency.Complete(ctx, paymentID, responseBytes, gatewayResp.LenderOrderID); err != nil {
-		// Log error but don't fail the request
-	}
-
-	// Publish event
 	s.publisher.Publish(ctx, &port.OrderEvent{
 		Type:          port.EventOrderCreated,
 		PaymentID:     paymentID,
 		UserID:        req.UserID,
-		MerchantID:    "", // From config, not in request
+		MerchantID:    merchantID,
 		Lender:        order.Lender,
 		Amount:        req.Amount,
 		Currency:      req.Currency,
-		Status:        gatewayResp.Status,
-		LenderOrderID: gatewayResp.LenderOrderID,
+		Status:        "PENDING",
+		LenderOrderID: lenderOrderIDPtr,
 	})
 
 	return response, nil
@@ -226,29 +252,132 @@ func (s *OrderService) GetOrderStatus(ctx context.Context, paymentID string) (*r
 		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order not found")
 	}
 
-	response := &res.OrderStatusResponse{
-		PaymentID:            order.PaymentID,
-		UserID:               order.UserID,
-		MerchantID:           order.MerchantID,
-		Amount:               order.Amount,
-		Currency:             order.Currency,
-		Status:               string(order.Status),
-		LenderOrderID:        order.LenderOrderID,
-		LenderMerchantTxnID:  order.LenderMerchantTxnID,
-		LenderLastStatus:     order.LenderLastStatus,
-		LenderLastTxnID:      order.LenderLastTxnID,
-		LenderLastTxnStatus:  order.LenderLastTxnStatus,
-		LenderLastTxnMessage: order.LenderLastTxnMessage,
-		LastErrorCode:        order.LastErrorCode,
-		LastErrorMessage:     order.LastErrorMessage,
-		CreatedAt:            order.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:            order.UpdatedAt.Format(time.RFC3339),
+	status := string(order.Status.OrDefault())
+	lenderOrderID := ""
+	if order.LenderOrderID != nil {
+		lenderOrderID = *order.LenderOrderID
+	}
+	lenderLastStatus := ""
+	if order.LenderLastStatus != nil {
+		lenderLastStatus = *order.LenderLastStatus
+	}
+	lenderLastMsg := ""
+	if order.LenderLastTxnMessage != nil {
+		lenderLastMsg = *order.LenderLastTxnMessage
+	}
+	lastErrCode := ""
+	if order.LastErrorCode != nil {
+		lastErrCode = *order.LastErrorCode
+	}
+	lastErrMsg := ""
+	if order.LastErrorMessage != nil {
+		lastErrMsg = *order.LastErrorMessage
 	}
 
-	return response, nil
+	// Parse EMI plan from JSONB if present
+	var emi *res.EmiDetail
+	if len(order.EMIPlan) > 0 {
+		var parsed struct {
+			Tenure             int     `json:"tenure"`
+			EMI                float64 `json:"emi"`
+			InterestRate       float64 `json:"interestRate"`
+			Principal          float64 `json:"principal"`
+			TotalPayableAmount float64 `json:"totalPayableAmount"`
+			FirstEmiDueDate    string  `json:"firstEmiDueDate"`
+		}
+		if err := json.Unmarshal(order.EMIPlan, &parsed); err == nil {
+			emi = &res.EmiDetail{
+				Tenure:             parsed.Tenure,
+				EMI:                parsed.EMI,
+				InterestRate:       parsed.InterestRate,
+				Principal:          parsed.Principal,
+				TotalPayableAmount: parsed.TotalPayableAmount,
+				FirstEmiDueDate:    parsed.FirstEmiDueDate,
+			}
+		}
+	}
+
+	return &res.OrderStatusResponse{
+		PaymentID:         order.PaymentID,
+		Status:            status,
+		LenderOrderID:     lenderOrderID,
+		Amount:            order.Amount,
+		Currency:          order.Currency,
+		EmiPlan:           emi,
+		LenderLastStatus:  lenderLastStatus,
+		LenderLastMessage: lenderLastMsg,
+		LastErrorCode:     lastErrCode,
+		LastErrorMessage:  lastErrMsg,
+		CreatedAt:         order.CreatedAt,
+		UpdatedAt:         order.UpdatedAt,
+	}, nil
 }
 
-// ProcessCallback processes an order callback event
+// ListByUserID lists orders for a user with optional filters
+func (s *OrderService) ListByUserID(ctx context.Context, listReq req.ListOrdersRequest) (*res.OrderListResponse, error) {
+	orders, total, err := s.orderRepo.ListByUserID(ctx, listReq.UserID, listReq.MerchantID, listReq.Status, listReq.Page, listReq.PerPage)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]res.OrderSummary, len(orders))
+	for i, o := range orders {
+		lenderOrderID := ""
+		if o.LenderOrderID != nil {
+			lenderOrderID = *o.LenderOrderID
+		}
+		summaries[i] = res.OrderSummary{
+			PaymentID:     o.PaymentID,
+			Status:        string(o.Status.OrDefault()),
+			LenderOrderID: lenderOrderID,
+			Amount:        o.Amount,
+			Currency:      o.Currency,
+			CreatedAt:     o.CreatedAt,
+			UpdatedAt:     o.UpdatedAt,
+		}
+	}
+	if listReq.Page < 1 {
+		listReq.Page = 1
+	}
+	if listReq.PerPage < 1 {
+		listReq.PerPage = 20
+	}
+	return &res.OrderListResponse{
+		Orders:  summaries,
+		Total:   total,
+		Page:    listReq.Page,
+		PerPage: listReq.PerPage,
+	}, nil
+}
+
+// SupportUpdateStatus allows support to override order status (PENDING → FAILED or CANCELLED)
+func (s *OrderService) SupportUpdateStatus(ctx context.Context, paymentID string, updateReq req.UpdateOrderStatusRequest) (*entity.Order, error) {
+	order, err := s.orderRepo.GetForUpdate(ctx, paymentID)
+	if err != nil {
+		return nil, err
+	}
+	if order == nil {
+		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order not found")
+	}
+	target := entity.OrderStatus(updateReq.Status)
+	allowed := order.Status == entity.OrderPending && (target == entity.OrderFailed || target == entity.OrderCancelled)
+	if !allowed {
+		return nil, sharedErrors.New(sharedErrors.CodeInvalidTransition, 422,
+			"cannot move "+string(order.Status)+" → "+string(target)+" via support override")
+	}
+	reason := updateReq.Reason
+	order.Status = target
+	order.LastErrorMessage = &reason
+	order.LenderLastStatus = ptr("SUPPORT_OVERRIDE")
+	order.UpdatedAt = time.Now().UTC()
+	if err := s.orderRepo.Update(ctx, order); err != nil {
+		return nil, err
+	}
+	return order, nil
+}
+
+func ptr(s string) *string { return &s }
+
+// ProcessCallback processes an order callback event (from Kafka consumer)
 func (s *OrderService) ProcessCallback(ctx context.Context, req req.OrderCallbackRequest) error {
 	// Parse event time
 	eventTime, err := time.Parse(time.RFC3339, req.EventTime)

@@ -1,5 +1,8 @@
 env: "local"
 
+# For PATCH /v1/payin3/order/:paymentId/status (support override)
+internal_api_token: ""
+
 http:
   port: "8080"
   read_timeout: 30s
@@ -18,16 +21,7 @@ db:
   conn_max_lifetime: 300s
   conn_max_idle_time: 120s
 
-lazypay:
-  base_url: "https://sandbox.lazypay.in"
-  access_key: "CO4KGG9DJEDZI3J04NNO"
-  secret_key: "49165512a4d220c580175223711c49dc68ab7cdf"
-  merchant_id: ""  # Optional - leave empty if you only have subMerchantId
-  sub_merchant_id: "YOUR_SUB_MERCHANT_ID"  # Replace with your actual subMerchantId
-  return_url: "https://yourapp.test/lazypay/callback"  # Callback URL for redirects
-  profile_timeout: 10s
-  payment_timeout: 5s
-  enabled: false
+
 
 redis:
   addr: "localhost:6379"
@@ -48,3 +42,16 @@ kafka:
 userProfileService:
   baseURL: "https://userprofile-sit.popclub.co.in"
   timeout: "5s"
+
+lazypay:
+  base_url: "https://sboxapi.lazypay.in"
+  access_key: "CO4KGG9DJEDZI3J04NNO"
+  secret_key: "49165512a4d220c580175223711c49dc68ab7cdf"
+  merchant_id: "270"  # Optional - leave empty if you only have subMerchantId
+  sub_merchant_id: "270"  # Replace with your actual subMerchantId
+  return_url: "https://yourapp.test/lazypay/callback"  # Callback URL for redirects
+  profile_timeout: 10s
+  payment_timeout: 5s
+  enabled: true
+
+

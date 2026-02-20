@@ -24,8 +24,10 @@ func (c *LazypayConfig) GetMerchantID() string {
 // DefaultConfig returns default Lazypay configuration
 func DefaultConfig() LazypayConfig {
 	return LazypayConfig{
-		BaseURL:        "https://sandbox.lazypay.in",
+		BaseURL:        "https://sboxapi.lazypay.in",
 		ProfileTimeout: 10,
 		PaymentTimeout: 5,
+		MerchantID:     "270",
+		SubMerchantID:  "270",
 	}
 }

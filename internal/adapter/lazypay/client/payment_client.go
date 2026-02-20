@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
+
 
 	"lending-hub-service/internal/adapter/lazypay/config"
 	lpConstants "lending-hub-service/internal/adapter/lazypay/constants"
@@ -125,14 +127,14 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, input orderPort.OrderIn
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response (paymentID not available here, set by service layer)
+	// Map to canonical response (paymentID set by service layer)
 	return &orderResp.OrderResponse{
 		PaymentID:     "", // Set by service layer
 		Status:        lpResp.Status,
-		LenderOrderID: &lpResp.OrderID,
-		RedirectURL:   &lpResp.RedirectURL,
-		ErrorCode:     nil, // Not in LP response
-		ErrorMessage:  nil, // Not in LP response
+		LenderOrderID: lpResp.OrderID,
+		RedirectURL:   lpResp.RedirectURL,
+		ErrorCode:     nil,
+		ErrorMessage:  nil,
 	}, nil
 }
 
@@ -185,18 +187,15 @@ func (c *PaymentClient) GetOrderStatus(ctx context.Context, merchantTxnID string
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response
-	lenderOrderID := lpResp.OrderID
+	// Map to canonical response (used for enquiry; paymentId filled by caller)
 	return &orderResp.OrderStatusResponse{
-		PaymentID:     "", // Set by service layer (looked up from merchantTxnID)
-		UserID:        "", // Not in LP response
-		MerchantID:    "", // Not in LP response
-		Amount:        0,  // Not in LP response
-		Currency:      "", // Not in LP response
+		PaymentID:     "",
 		Status:        lpResp.Status,
-		LenderOrderID: &lenderOrderID,
-		CreatedAt:     "", // Not in LP response
-		UpdatedAt:     "", // Not in LP response
+		LenderOrderID: lpResp.OrderID,
+		Amount:        0,
+		Currency:      "INR",
+		CreatedAt:     time.Time{},
+		UpdatedAt:     time.Time{},
 	}, nil
 }
 

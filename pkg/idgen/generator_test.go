@@ -77,3 +77,22 @@ func TestUniqueness(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestPaymentIDPrefix(t *testing.T) {
+	gen := New()
+	id := gen.PaymentID()
+	if !strings.HasPrefix(id, "lps_") {
+		t.Errorf("PaymentID %s should start with lps_", id)
+	}
+}
+
+func TestRefundIDPrefix(t *testing.T) {
+	gen := New()
+	id := gen.RefundID()
+	if !strings.HasPrefix(id, "ref_") {
+		t.Errorf("RefundID %s should start with ref_", id)
+	}
+}
+
+// Sortability: ULIDs are time-ordered; with rand.Reader entropy, IDs are unique.
+// For strict lexicographic order = creation order, use ulid.Monotonic entropy.

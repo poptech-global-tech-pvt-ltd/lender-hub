@@ -12,6 +12,7 @@ type OrderRepository interface {
 	GetByPaymentID(ctx context.Context, paymentID string) (*entity.Order, error)
 	GetForUpdate(ctx context.Context, paymentID string) (*entity.Order, error)
 	Update(ctx context.Context, order *entity.Order) error
+	ListByUserID(ctx context.Context, userID, merchantID, status string, page, perPage int) ([]*entity.Order, int, error)
 }
 
 // PaymentMappingRepository manages lender_payment_mapping

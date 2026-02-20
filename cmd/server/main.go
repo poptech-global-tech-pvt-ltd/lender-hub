@@ -36,19 +36,15 @@ import (
 	// Domain modules
 	"lending-hub-service/internal/domain/onboarding"
 	onboardingPort "lending-hub-service/internal/domain/onboarding/port"
-	onboardingStub "lending-hub-service/internal/domain/onboarding/stub"
 	"lending-hub-service/internal/domain/order"
 	orderPort "lending-hub-service/internal/domain/order/port"
 	orderRepo "lending-hub-service/internal/domain/order/repository"
-	orderStub "lending-hub-service/internal/domain/order/stub"
 	"lending-hub-service/internal/domain/profile"
 	profilePort "lending-hub-service/internal/domain/profile/port"
 	profileRepo "lending-hub-service/internal/domain/profile/repository"
 	profileService "lending-hub-service/internal/domain/profile/service"
-	profileStub "lending-hub-service/internal/domain/profile/stub"
 	"lending-hub-service/internal/domain/refund"
 	refundPort "lending-hub-service/internal/domain/refund/port"
-	refundStub "lending-hub-service/internal/domain/refund/stub"
 
 	// Adapters
 	"lending-hub-service/internal/adapter/lazypay"
@@ -238,32 +234,23 @@ func main() {
 	var orderGateway orderPort.OrderGateway
 	var refundGateway refundPort.RefundGateway
 
-	if cfg.Lazypay.Enabled {
-		// Convert config.Config.Lazypay to adapter config
-		lpCfg := &lpConfig.LazypayConfig{
-			BaseURL:        cfg.Lazypay.BaseURL,
-			AccessKey:      cfg.Lazypay.AccessKey,
-			SecretKey:      cfg.Lazypay.SecretKey,
-			MerchantID:     cfg.Lazypay.MerchantID,
-			SubMerchantID:  cfg.Lazypay.SubMerchantID,
-			ReturnURL:      cfg.Lazypay.ReturnURL,
-			ProfileTimeout: int(cfg.Lazypay.ProfileTimeout.Seconds()),
-			PaymentTimeout: int(cfg.Lazypay.PaymentTimeout.Seconds()),
-		}
-		lazypayClient := lazypay.NewAdapter(lpCfg, logger, idGen)
-		profileGateway = lazypayClient.ProfileGateway()
-		onboardingGateway = lazypayClient.OnboardingGateway()
-		orderGateway = lazypayClient.OrderGateway()
-		refundGateway = lazypayClient.RefundGateway()
-		logger.Info("Using Lazypay adapter")
-	} else {
-		// Use stubs
-		profileGateway = profileStub.NewStubProfileGateway()
-		onboardingGateway = onboardingStub.NewStubOnboardingGateway()
-		orderGateway = orderStub.NewStubOrderGateway()
-		refundGateway = refundStub.NewStubRefundGateway()
-		logger.Info("Using stub gateways (Lazypay disabled)")
+	// Always use Lazypay adapter (stubs only in tests)
+	lpCfg := &lpConfig.LazypayConfig{
+		BaseURL:        cfg.Lazypay.BaseURL,
+		AccessKey:      cfg.Lazypay.AccessKey,
+		SecretKey:      cfg.Lazypay.SecretKey,
+		MerchantID:     cfg.Lazypay.MerchantID,
+		SubMerchantID:  cfg.Lazypay.SubMerchantID,
+		ReturnURL:      cfg.Lazypay.ReturnURL,
+		ProfileTimeout: int(cfg.Lazypay.ProfileTimeout.Seconds()),
+		PaymentTimeout: int(cfg.Lazypay.PaymentTimeout.Seconds()),
 	}
+	lazypayClient := lazypay.NewAdapter(lpCfg, logger, idGen)
+	profileGateway = lazypayClient.ProfileGateway()
+	onboardingGateway = lazypayClient.OnboardingGateway()
+	orderGateway = lazypayClient.OrderGateway()
+	refundGateway = lazypayClient.RefundGateway()
+	logger.Info("Using Lazypay adapter")
 
 	// ═══════════════════════════════════════
 	// 8. Domain modules
@@ -276,8 +263,12 @@ func main() {
 	// Onboarding module
 	onboardingModule := onboarding.NewModule(gormDB, onboardingGateway, profileUpdater, idGen, contactResolver)
 
-	// Order module
-	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen, contactResolver)
+	// Order module (merchantID for lender_payment_state.merchant_id NOT NULL)
+	orderMerchantID := cfg.Lazypay.MerchantID
+	if orderMerchantID == "" {
+		orderMerchantID = cfg.Lazypay.SubMerchantID
+	}
+	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen, contactResolver, orderMerchantID, cfg.InternalAPIToken, logger)
 
 	// Refund module
 	orderRepo := orderRepo.NewOrderRepository(gormDB)
