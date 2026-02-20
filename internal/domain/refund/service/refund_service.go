@@ -11,8 +11,8 @@ import (
 	res "lending-hub-service/internal/domain/refund/dto/response"
 	"lending-hub-service/internal/domain/refund/entity"
 	"lending-hub-service/internal/domain/refund/port"
-	sharedErrors "lending-hub-service/internal/shared/errors"
 	"lending-hub-service/internal/infrastructure/observability/metrics"
+	sharedErrors "lending-hub-service/internal/shared/errors"
 	"lending-hub-service/pkg/idgen"
 	baseLogger "lending-hub-service/pkg/logger"
 )
@@ -75,8 +75,8 @@ func (s *RefundService) CreateRefund(ctx context.Context, r req.CreateRefundRequ
 			order = reloaded
 		}
 	}
-	if order.Status != orderEntity.OrderSuccess {
-		return nil, sharedErrors.New(sharedErrors.CodeOrderNotRefundable, 400, "can only refund orders with SUCCESS status")
+	if !order.Status.IsRefundable() {
+		return nil, sharedErrors.New(sharedErrors.CodeOrderNotRefundable, 400, "can only refund orders with SUCCESS or COMPLETE status")
 	}
 
 	loanID := ""
@@ -136,7 +136,11 @@ func (s *RefundService) CreateRefund(ctx context.Context, r req.CreateRefundRequ
 	resp, err := s.gateway.ProcessRefund(ctx, gatewayReq)
 
 	if err != nil {
-		refund.MarkFailed("API_ERROR", "Refund API call failed")
+		lenderStatus, lenderMsg := "API_ERROR", "Refund API call failed"
+		if de, ok := err.(*sharedErrors.DomainError); ok {
+			lenderStatus, lenderMsg = de.Code, de.Message
+		}
+		refund.MarkFailed(lenderStatus, lenderMsg)
 		_ = s.repo.Update(ctx, refund)
 		return nil, err
 	}
@@ -197,8 +201,9 @@ func (s *RefundService) resolveOrderFromEnquiry(ctx context.Context, order *orde
 	if err != nil {
 		return err
 	}
-	newStatus := orderEntity.OrderStatus(gatewayResp.Status)
-	order.Status = newStatus.OrDefault()
+	// COMPLETE → SUCCESS for DB enum (lender_payment_status has no COMPLETE)
+	newStatus := orderEntity.OrderStatus(gatewayResp.Status).OrDefault().NormalizeForDB()
+	order.Status = newStatus
 	if gatewayResp.LenderOrderID != "" {
 		order.LenderOrderID = &gatewayResp.LenderOrderID
 	}

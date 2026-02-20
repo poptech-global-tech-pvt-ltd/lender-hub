@@ -4,10 +4,10 @@ import "context"
 
 // ProcessRefundRequest holds data for a refund API call
 type ProcessRefundRequest struct {
-	MerchantTxnID string  // order's loanId = merchantTxnId at Lazypay
+	MerchantTxnID string // order's loanId = merchantTxnId at Lazypay
 	Amount        float64
 	Currency      string
-	RefundTxnID   string  // our refundId = refundTxnId sent to Lazypay
+	RefundTxnID   string // our refundId = refundTxnId sent to Lazypay
 }
 
 // ProcessRefundResponse holds the Lazypay refund API response

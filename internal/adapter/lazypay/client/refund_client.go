@@ -99,16 +99,20 @@ func (c *RefundClient) ProcessRefund(ctx context.Context, req refundPort.Process
 }
 
 func (c *RefundClient) handleProcessRefundError(statusCode int, body []byte) (*refundPort.ProcessRefundResponse, error) {
-	var errResp lpResp.LPRefundErrorResponse
-	if err := json.Unmarshal(body, &errResp); err == nil && errResp.ErrorCode == "LPDUPLICATEREFUND" {
-		return &refundPort.ProcessRefundResponse{ErrorCode: "LPDUPLICATEREFUND"}, nil
-	}
-	// Try alternate error envelope
-	var altErr struct {
+	var errResp struct {
 		ErrorCode string `json:"errorCode"`
+		Message   string `json:"message"`
 	}
-	if err := json.Unmarshal(body, &altErr); err == nil && altErr.ErrorCode == "LPDUPLICATEREFUND" {
+	_ = json.Unmarshal(body, &errResp)
+	code := errResp.ErrorCode
+	if code == "LPDUPLICATEREFUND" {
 		return &refundPort.ProcessRefundResponse{ErrorCode: "LPDUPLICATEREFUND"}, nil
+	}
+	if code != "" {
+		return nil, mapper.MapLPError(code)
+	}
+	if errResp.Message != "" {
+		return nil, sharedErrors.New(sharedErrors.CodeInternalError, statusCode, errResp.Message)
 	}
 	return nil, sharedErrors.New(sharedErrors.CodeInternalError, statusCode, "provider refund error")
 }

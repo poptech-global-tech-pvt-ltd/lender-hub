@@ -43,16 +43,16 @@ type DBConfig struct {
 
 // LazypayConfig defines Lazypay provider settings (stub for now)
 type LazypayConfig struct {
-	BaseURL        string        `mapstructure:"base_url"`
-	AccessKey      string        `mapstructure:"access_key"`
-	SecretKey      string        `mapstructure:"secret_key"`
-	MerchantID     string        `mapstructure:"merchant_id"`     // Optional - use subMerchantId if not provided
-	SubMerchantID  string        `mapstructure:"sub_merchant_id"` // Used in onboarding and as fallback
-	ReturnURL      string        `mapstructure:"return_url"`      // Callback URL for redirects
-	ProfileTimeout      time.Duration `mapstructure:"profile_timeout"`
-	PaymentTimeout      time.Duration `mapstructure:"payment_timeout"`
-	RefundEnquirySLA    time.Duration `mapstructure:"refund_enquiry_sla"` // After this, refund not found in enquiry → FAILED
-	Enabled             bool          `mapstructure:"enabled"`
+	BaseURL          string        `mapstructure:"base_url"`
+	AccessKey        string        `mapstructure:"access_key"`
+	SecretKey        string        `mapstructure:"secret_key"`
+	MerchantID       string        `mapstructure:"merchant_id"`     // Optional - use subMerchantId if not provided
+	SubMerchantID    string        `mapstructure:"sub_merchant_id"` // Used in onboarding and as fallback
+	ReturnURL        string        `mapstructure:"return_url"`      // Callback URL for redirects
+	ProfileTimeout   time.Duration `mapstructure:"profile_timeout"`
+	PaymentTimeout   time.Duration `mapstructure:"payment_timeout"`
+	RefundEnquirySLA time.Duration `mapstructure:"refund_enquiry_sla"` // After this, refund not found in enquiry → FAILED
+	Enabled          bool          `mapstructure:"enabled"`
 }
 
 // RedisConfig defines Redis cache settings

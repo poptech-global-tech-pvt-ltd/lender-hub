@@ -45,7 +45,7 @@ func (r *UserContactResolver) Resolve(ctx context.Context, userID string) (*enti
 	}
 
 	if cached != nil {
-		r.logger.Debug("user contact found in local DB",
+		r.logger.Info("user contact found in local DB",
 			baseLogger.UserID(userID),
 		)
 		return cached, nil

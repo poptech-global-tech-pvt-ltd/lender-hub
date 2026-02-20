@@ -161,7 +161,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	// Status: always PENDING on create (gateway may return empty/INITIATED)
 	orderStatus := entity.OrderPending
 	switch entity.OrderStatus(gatewayResp.Status) {
-	case entity.OrderSuccess, entity.OrderFailed, entity.OrderRefunded, entity.OrderExpired, entity.OrderCancelled:
+	case entity.OrderSuccess, entity.OrderComplete, entity.OrderFailed, entity.OrderRefunded, entity.OrderExpired, entity.OrderCancelled:
 		orderStatus = entity.OrderStatus(gatewayResp.Status)
 	case entity.OrderPending:
 		orderStatus = entity.OrderPending
@@ -295,9 +295,9 @@ func (s *OrderService) resolveOrderFromEnquiry(ctx context.Context, order *entit
 	if err != nil {
 		return err
 	}
-	// Update order from enquiry
-	newStatus := entity.OrderStatus(gatewayResp.Status)
-	order.Status = newStatus.OrDefault()
+	// Update order from enquiry (COMPLETE → SUCCESS for DB enum)
+	newStatus := entity.OrderStatus(gatewayResp.Status).OrDefault().NormalizeForDB()
+	order.Status = newStatus
 	if gatewayResp.LenderOrderID != "" {
 		order.LenderOrderID = &gatewayResp.LenderOrderID
 	}
@@ -507,7 +507,7 @@ func (s *OrderService) ProcessCallback(ctx context.Context, req req.OrderCallbac
 	}
 
 	// If SUCCESS, update profile limit (deduct available limit)
-	if newStatus == entity.OrderSuccess {
+	if newStatus == entity.OrderSuccess || newStatus == entity.OrderComplete {
 		// Deduct amount from available limit
 		// Get current profile to check available limit
 		// For now, we'll just update the limit (in production, you'd check first)

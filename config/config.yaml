@@ -53,5 +53,6 @@ lazypay:
   profile_timeout: 10s
   payment_timeout: 5s
   enabled: true
+  
 
 
