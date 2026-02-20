@@ -181,17 +181,17 @@ func (c *PaymentClient) GetOrderStatus(ctx context.Context, merchantTxnID string
 		return nil, c.handleErrorResponse(resp.Body)
 	}
 
-	// Unmarshal response
-	var lpResp lpResp.LPOrderResponse
-	if err := json.Unmarshal(resp.Body, &lpResp); err != nil {
-		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
+	// Unmarshal response — enquiry returns { order: {...}, transactions: [...] }
+	var lpEnq lpResp.LPEnquiryResponse
+	if err := json.Unmarshal(resp.Body, &lpEnq); err != nil {
+		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal enquiry response: "+err.Error())
 	}
 
-	// Map to canonical response (used for enquiry; paymentId filled by caller)
+	// Map order-level status from enquiry
 	return &orderResp.OrderStatusResponse{
 		PaymentID:     "",
-		Status:        lpResp.Status,
-		LenderOrderID: lpResp.OrderID,
+		Status:        lpEnq.Order.Status,
+		LenderOrderID: lpEnq.Order.OrderID,
 		Amount:        0,
 		Currency:      "INR",
 		CreatedAt:     time.Time{},

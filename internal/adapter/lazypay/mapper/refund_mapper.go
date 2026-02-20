@@ -1,8 +1,6 @@
 package mapper
 
 import (
-	"lending-hub-service/pkg/idgen"
-
 	refundResp "lending-hub-service/internal/domain/refund/dto/response"
 	lpCommon "lending-hub-service/internal/adapter/lazypay/dto/common"
 	lpReq "lending-hub-service/internal/adapter/lazypay/dto/request"
@@ -10,48 +8,40 @@ import (
 )
 
 // RefundMapper maps between canonical and Lazypay refund formats
-type RefundMapper struct {
-	idgen *idgen.Generator
-}
+type RefundMapper struct{}
 
 // NewRefundMapper creates a new refund mapper
-func NewRefundMapper(idgen *idgen.Generator) *RefundMapper {
-	return &RefundMapper{idgen: idgen}
+func NewRefundMapper() *RefundMapper {
+	return &RefundMapper{}
 }
 
-// ToLPRequest builds refund DTO and returns the generated refundTxnId for DB persistence.
-// Postman contract: { merchantTxnId, amount, refundTxnId }
-func (m *RefundMapper) ToLPRequest(merchantTxnID string, amount float64, currency string) (*lpReq.LPRefundRequest, string) {
-	refundID := m.idgen.RefundID() // e.g. REF_01HQZV8X9P...
-
+// ToLPRequest builds refund DTO with given refundTxnID (our generated refundId)
+func (m *RefundMapper) ToLPRequest(merchantTxnID string, amount float64, currency string, refundTxnID string) *lpReq.LPRefundRequest {
 	return &lpReq.LPRefundRequest{
 		MerchantTxnID: merchantTxnID,
 		Amount: lpCommon.LPAmount{
 			Value:    lpCommon.FormatAmount(amount),
 			Currency: currency,
 		},
-		RefundTxnID: refundID,
-	}, refundID
+		RefundTxnID: refundTxnID,
+	}
 }
 
-// FromLPRefundResponse converts LP response → canonical RefundResponse
+// FromLPRefundResponse converts LP response → RefundResponse (legacy / tests)
 func FromLPRefundResponse(
 	lp *lpResp.LPRefundResponse,
-	refundID, paymentID string,
+	refundID, paymentID, loanID string,
 	amount float64,
 	currency string,
 ) *refundResp.RefundResponse {
-	var lenderRefID *string
-	if lp.LenderRefID != "" {
-		lenderRefID = &lp.LenderRefID
-	}
 	return &refundResp.RefundResponse{
-		RefundID:   refundID,
-		PaymentID:  paymentID,
-		Provider:   "LAZYPAY",
-		Status:     lp.Status,
-		Amount:     amount,
-		Currency:   currency,
-		LenderRefID: lenderRefID,
+		RefundID:            refundID,
+		PaymentRefundID:     "",
+		ProviderRefundTxnID: lp.LpTxnID,
+		PaymentID:           paymentID,
+		LoanID:              loanID,
+		Status:              lp.Status,
+		Amount:              amount,
+		Currency:            currency,
 	}
 }

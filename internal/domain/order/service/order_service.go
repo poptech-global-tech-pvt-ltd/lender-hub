@@ -57,8 +57,11 @@ func NewOrderService(
 
 // CreateOrder creates a new order with idempotency
 func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderRequest) (*res.OrderResponse, error) {
-	// Payment ID is ALWAYS server-generated — never from caller
-	paymentID := s.idgen.PaymentID()
+	// paymentId = POP's ID from request (stored as payment_id for primary polling)
+	paymentID := req.PaymentID
+
+	// loanId = our ID (lps_xxx) = merchantTxnId to Lazypay
+	loanID := s.idgen.PaymentID()
 
 	// MerchantID and Source: use request or defaults
 	merchantID := req.MerchantID
@@ -79,9 +82,9 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		return nil, sharedErrors.New(sharedErrors.CodeInvalidRequest, 400, "emiPlan.tenure or emiSelection.tenure required")
 	}
 
-	// Idempotency key = request hash (duplicate requests return cached response)
+	// Idempotency key = POP's paymentId
 	requestHash := s.idempotency.ComputeHash(req)
-	idempotencyKey := requestHash
+	idempotencyKey := paymentID
 
 	result, key, err := s.idempotency.Acquire(ctx, idempotencyKey, requestHash)
 	if err != nil {
@@ -113,7 +116,8 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		return nil, sharedErrors.New(sharedErrors.CodeUserContactNotFound, 422, "Unable to resolve user contact details (mobile required)")
 	}
 
-	merchantTxnID := s.idgen.MerchantTxnID()
+	// loanId = merchantTxnId to Lazypay (no separate txn id)
+	merchantTxnID := loanID
 
 	// Build EMI plans (single plan from tenure)
 	emiType := "PAY_IN_PARTS"
@@ -204,18 +208,19 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		PaymentID:           paymentID,
 		UserID:              req.UserID,
 		Lender:              order.Lender,
-		LenderMerchantTxnID: merchantTxnID,
+		LenderMerchantTxnID: loanID,
 		LenderOrderID:       lenderOrderIDPtr,
 		CreatedAt:           time.Now().UTC(),
 		UpdatedAt:           time.Now().UTC(),
 	}
 	_ = s.mappingRepo.Create(ctx, mapping)
 
-	// Build response — status always "PENDING" on create
+	// Build response: loanId, paymentId, lenderOrderId, status, redirectUrl
 	response := &res.OrderResponse{
+		LoanID:        loanID,
 		PaymentID:     paymentID,
-		Status:        "PENDING",
 		LenderOrderID: gatewayResp.LenderOrderID,
+		Status:        "PENDING",
 		RedirectURL:   gatewayResp.RedirectURL,
 		Amount:        order.Amount,
 		Currency:      order.Currency,
@@ -242,7 +247,8 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	return response, nil
 }
 
-// GetOrderStatus retrieves order status
+// GetOrderStatus retrieves order by POP's paymentId (primary polling)
+// If order is non-terminal, calls Lazypay enquiry to refresh status and persists updates
 func (s *OrderService) GetOrderStatus(ctx context.Context, paymentID string) (*res.OrderStatusResponse, error) {
 	order, err := s.orderRepo.GetByPaymentID(ctx, paymentID)
 	if err != nil {
@@ -251,8 +257,72 @@ func (s *OrderService) GetOrderStatus(ctx context.Context, paymentID string) (*r
 	if order == nil {
 		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order not found")
 	}
+	if err := s.resolveOrderFromEnquiry(ctx, order); err != nil {
+		// Soft fail: return current DB state
+	}
+	return s.orderToStatusResponse(order), nil
+}
 
-	status := string(order.Status.OrDefault())
+// GetOrderStatusByLoanID retrieves order by our loanId (internal/support)
+// If order is non-terminal, calls Lazypay enquiry to refresh status and persists updates
+func (s *OrderService) GetOrderStatusByLoanID(ctx context.Context, loanID string) (*res.OrderStatusResponse, error) {
+	order, err := s.orderRepo.GetByLoanID(ctx, loanID)
+	if err != nil {
+		return nil, err
+	}
+	if order == nil {
+		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order not found")
+	}
+	if err := s.resolveOrderFromEnquiry(ctx, order); err != nil {
+		// Soft fail: return current DB state
+	}
+	return s.orderToStatusResponse(order), nil
+}
+
+// resolveOrderFromEnquiry calls Lazypay enquiry and updates order if non-terminal
+func (s *OrderService) resolveOrderFromEnquiry(ctx context.Context, order *entity.Order) error {
+	if order.Status.IsTerminal() {
+		return nil
+	}
+	loanID := ""
+	if order.LenderMerchantTxnID != nil {
+		loanID = *order.LenderMerchantTxnID
+	}
+	if loanID == "" {
+		return nil
+	}
+	gatewayResp, err := s.gateway.GetOrderStatus(ctx, loanID)
+	if err != nil {
+		return err
+	}
+	// Update order from enquiry
+	newStatus := entity.OrderStatus(gatewayResp.Status)
+	order.Status = newStatus.OrDefault()
+	if gatewayResp.LenderOrderID != "" {
+		order.LenderOrderID = &gatewayResp.LenderOrderID
+	}
+	order.LenderLastStatus = &gatewayResp.Status
+	order.UpdatedAt = time.Now().UTC()
+	return s.orderRepo.Update(ctx, order)
+}
+
+// GetOrderStatusByLenderOrderID retrieves order by Lazypay's orderId (recon, no enquiry)
+func (s *OrderService) GetOrderStatusByLenderOrderID(ctx context.Context, lenderOrderID string) (*res.OrderStatusResponse, error) {
+	order, err := s.orderRepo.GetByLenderOrderID(ctx, lenderOrderID)
+	if err != nil {
+		return nil, err
+	}
+	if order == nil {
+		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order not found")
+	}
+	return s.orderToStatusResponse(order), nil
+}
+
+func (s *OrderService) orderToStatusResponse(order *entity.Order) *res.OrderStatusResponse {
+	loanID := ""
+	if order.LenderMerchantTxnID != nil {
+		loanID = *order.LenderMerchantTxnID
+	}
 	lenderOrderID := ""
 	if order.LenderOrderID != nil {
 		lenderOrderID = *order.LenderOrderID
@@ -273,8 +343,6 @@ func (s *OrderService) GetOrderStatus(ctx context.Context, paymentID string) (*r
 	if order.LastErrorMessage != nil {
 		lastErrMsg = *order.LastErrorMessage
 	}
-
-	// Parse EMI plan from JSONB if present
 	var emi *res.EmiDetail
 	if len(order.EMIPlan) > 0 {
 		var parsed struct {
@@ -296,21 +364,21 @@ func (s *OrderService) GetOrderStatus(ctx context.Context, paymentID string) (*r
 			}
 		}
 	}
-
 	return &res.OrderStatusResponse{
-		PaymentID:         order.PaymentID,
-		Status:            status,
-		LenderOrderID:     lenderOrderID,
-		Amount:            order.Amount,
-		Currency:          order.Currency,
-		EmiPlan:           emi,
-		LenderLastStatus:  lenderLastStatus,
+		LoanID:           loanID,
+		PaymentID:        order.PaymentID,
+		Status:           string(order.Status.OrDefault()),
+		LenderOrderID:    lenderOrderID,
+		Amount:           order.Amount,
+		Currency:         order.Currency,
+		EmiPlan:          emi,
+		LenderLastStatus: lenderLastStatus,
 		LenderLastMessage: lenderLastMsg,
-		LastErrorCode:     lastErrCode,
-		LastErrorMessage:  lastErrMsg,
-		CreatedAt:         order.CreatedAt,
-		UpdatedAt:         order.UpdatedAt,
-	}, nil
+		LastErrorCode:    lastErrCode,
+		LastErrorMessage: lastErrMsg,
+		CreatedAt:        order.CreatedAt,
+		UpdatedAt:        order.UpdatedAt,
+	}
 }
 
 // ListByUserID lists orders for a user with optional filters
@@ -321,11 +389,16 @@ func (s *OrderService) ListByUserID(ctx context.Context, listReq req.ListOrdersR
 	}
 	summaries := make([]res.OrderSummary, len(orders))
 	for i, o := range orders {
+		loanID := ""
+		if o.LenderMerchantTxnID != nil {
+			loanID = *o.LenderMerchantTxnID
+		}
 		lenderOrderID := ""
 		if o.LenderOrderID != nil {
 			lenderOrderID = *o.LenderOrderID
 		}
 		summaries[i] = res.OrderSummary{
+			LoanID:        loanID,
 			PaymentID:     o.PaymentID,
 			Status:        string(o.Status.OrDefault()),
 			LenderOrderID: lenderOrderID,
@@ -349,9 +422,26 @@ func (s *OrderService) ListByUserID(ctx context.Context, listReq req.ListOrdersR
 	}, nil
 }
 
-// SupportUpdateStatus allows support to override order status (PENDING → FAILED or CANCELLED)
+// SupportUpdateStatus allows support to override order status by POP's paymentId
 func (s *OrderService) SupportUpdateStatus(ctx context.Context, paymentID string, updateReq req.UpdateOrderStatusRequest) (*entity.Order, error) {
-	order, err := s.orderRepo.GetForUpdate(ctx, paymentID)
+	return s.supportUpdateStatusWithOrder(ctx, func() (*entity.Order, error) {
+		return s.orderRepo.GetForUpdate(ctx, paymentID)
+	}, updateReq)
+}
+
+// SupportUpdateStatusByLoanID allows support to override order status by our loanId
+func (s *OrderService) SupportUpdateStatusByLoanID(ctx context.Context, loanID string, updateReq req.UpdateOrderStatusRequest) (*entity.Order, error) {
+	order, err := s.orderRepo.GetByLoanID(ctx, loanID)
+	if err != nil || order == nil {
+		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order not found")
+	}
+	return s.supportUpdateStatusWithOrder(ctx, func() (*entity.Order, error) {
+		return s.orderRepo.GetForUpdate(ctx, order.PaymentID)
+	}, updateReq)
+}
+
+func (s *OrderService) supportUpdateStatusWithOrder(ctx context.Context, getOrder func() (*entity.Order, error), updateReq req.UpdateOrderStatusRequest) (*entity.Order, error) {
+	order, err := getOrder()
 	if err != nil {
 		return nil, err
 	}

@@ -3,7 +3,6 @@ package stub
 import (
 	"context"
 
-	res "lending-hub-service/internal/domain/refund/dto/response"
 	"lending-hub-service/internal/domain/refund/port"
 )
 
@@ -15,21 +14,14 @@ func NewStubRefundGateway() port.RefundGateway {
 	return &StubRefundGateway{}
 }
 
-// ProcessRefund returns a fake refund response with PENDING status
-func (g *StubRefundGateway) ProcessRefund(ctx context.Context, merchantTxnID string, amount float64, currency string) (*res.RefundResponse, string, error) {
-	// Generate a fake lender refund ID and refundTxnId
-	refundTxnID := "REF-STUB-" + merchantTxnID
-	lenderRefID := "LP-REFUND-" + refundTxnID
-
-	return &res.RefundResponse{
-		RefundID:    "", // Set by service layer
-		PaymentID:   "", // Set by service layer
-		Provider:    "LAZYPAY",
-		Status:      "PENDING",
-		Amount:      amount,
-		Currency:    currency,
-		LenderRefID: &lenderRefID,
-	}, refundTxnID, nil
+// ProcessRefund returns a fake REFUND_SUCCESS response
+func (g *StubRefundGateway) ProcessRefund(ctx context.Context, req port.ProcessRefundRequest) (*port.ProcessRefundResponse, error) {
+	return &port.ProcessRefundResponse{
+		Status:      "REFUND_SUCCESS",
+		LpTxnID:     "LP-TXN-STUB-" + req.RefundTxnID,
+		ParentTxnID: "LP-PARENT-STUB",
+		RespMessage: "Stub refund success",
+	}, nil
 }
 
 // EnquireRefund returns a stub enquiry response

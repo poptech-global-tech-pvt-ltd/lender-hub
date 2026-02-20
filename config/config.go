@@ -49,9 +49,10 @@ type LazypayConfig struct {
 	MerchantID     string        `mapstructure:"merchant_id"`     // Optional - use subMerchantId if not provided
 	SubMerchantID  string        `mapstructure:"sub_merchant_id"` // Used in onboarding and as fallback
 	ReturnURL      string        `mapstructure:"return_url"`      // Callback URL for redirects
-	ProfileTimeout time.Duration `mapstructure:"profile_timeout"`
-	PaymentTimeout time.Duration `mapstructure:"payment_timeout"`
-	Enabled        bool          `mapstructure:"enabled"`
+	ProfileTimeout      time.Duration `mapstructure:"profile_timeout"`
+	PaymentTimeout      time.Duration `mapstructure:"payment_timeout"`
+	RefundEnquirySLA    time.Duration `mapstructure:"refund_enquiry_sla"` // After this, refund not found in enquiry → FAILED
+	Enabled             bool          `mapstructure:"enabled"`
 }
 
 // RedisConfig defines Redis cache settings
@@ -140,6 +141,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("lazypay.profile_timeout", "10s")
 	v.SetDefault("lazypay.payment_timeout", "5s")
+	v.SetDefault("lazypay.refund_enquiry_sla", "1h")
 	v.SetDefault("lazypay.enabled", false)
 
 	v.SetDefault("redis.dial_timeout", "5s")

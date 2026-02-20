@@ -1,10 +1,10 @@
 package request
 
-// CreateRefundRequest - orderId looked up from paymentId internally, refundTxnId generated internally
+// CreateRefundRequest - refundId is server-generated, paymentRefundId is POP's refund reference
 type CreateRefundRequest struct {
-	RefundID  string  `json:"refundId" binding:"required"`  // caller's reference
-	PaymentID string  `json:"paymentId" binding:"required"` // which order to refund
-	Amount    float64 `json:"amount" binding:"required,gt=0"`
-	Currency  string  `json:"currency" binding:"required"`
-	Reason    string  `json:"reason" binding:"required"` // USER_CANCELLED, PRODUCT_RETURN, etc
+	PaymentID       string  `json:"paymentId" binding:"required"`       // POP's order paymentId
+	PaymentRefundID string  `json:"paymentRefundId" binding:"required"` // POP's refund reference
+	Amount          float64 `json:"amount" binding:"required,gt=0"`
+	Currency        string  `json:"currency" binding:"required"`
+	Reason          string  `json:"reason" binding:"required,oneof=USER_CANCELLED PRODUCT_RETURN ORDER_CANCELLED"`
 }

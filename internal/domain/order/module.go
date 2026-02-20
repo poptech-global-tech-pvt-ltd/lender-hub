@@ -54,14 +54,21 @@ func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdat
 
 // RegisterRoutes registers order module routes
 // NOTE: No POST /callback/order — callbacks come via Kafka consumer
+// Route order: more specific paths first (loan, recon) before /order/:paymentId
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 	createHandler := handler.NewCreateOrderHandler(m.Service, m.logger)
 	getHandler := handler.NewGetOrderHandler(m.Service)
+	getByLoanHandler := handler.NewGetOrderByLoanHandler(m.Service)
+	getByReconHandler := handler.NewGetOrderByReconHandler(m.Service)
 	listHandler := handler.NewListOrdersHandler(m.Service)
 	supportHandler := handler.NewSupportOrderHandler(m.Service, m.internalAPIToken)
+	supportByLoanHandler := handler.NewSupportOrderByLoanHandler(m.Service, m.internalAPIToken)
 
 	rg.POST("/order", createHandler.Handle)
+	rg.GET("/order/loan/:loanId", getByLoanHandler.Handle)
+	rg.GET("/order/recon/:lenderOrderId", getByReconHandler.Handle)
 	rg.GET("/order/:paymentId", getHandler.Handle)
 	rg.GET("/orders", listHandler.Handle)
+	rg.PATCH("/order/loan/:loanId/status", supportByLoanHandler.Handle)
 	rg.PATCH("/order/:paymentId/status", supportHandler.Handle)
 }

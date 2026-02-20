@@ -42,7 +42,7 @@ func NewLazypayClient(
 	c.profile = NewProfileClient(cfg, signer, profileExec, logger)
 	c.onboarding = NewOnboardingClient(cfg, signer, profileExec, logger)
 	c.payment = NewPaymentClient(cfg, signer, paymentExec, logger)
-	c.refund = NewRefundClient(cfg, signer, paymentExec, logger, idgen)
+	c.refund = NewRefundClient(cfg, signer, paymentExec, logger)
 	return c
 }
 

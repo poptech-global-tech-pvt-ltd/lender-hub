@@ -272,7 +272,15 @@ func main() {
 
 	// Refund module
 	orderRepo := orderRepo.NewOrderRepository(gormDB)
-	refundModule := refund.NewModule(gormDB, refundGateway, orderRepo, profileUpdater)
+	refundCache := cache.NewMemoryRefundCache()
+	refundEnquirySLA := cfg.Lazypay.RefundEnquirySLA
+	if refundEnquirySLA == 0 {
+		refundEnquirySLA = time.Hour
+	}
+	refundModule := refund.NewModule(
+		gormDB, orderRepo, orderGateway, refundGateway, refundCache, profileUpdater,
+		mc, logger, idGen, refundEnquirySLA,
+	)
 
 	// ═══════════════════════════════════════
 	// 9. Setup Gin router + middleware

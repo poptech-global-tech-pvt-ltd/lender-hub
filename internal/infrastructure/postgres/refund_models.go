@@ -6,7 +6,9 @@ import "time"
 type LenderRefund struct {
 	ID                     int64      `gorm:"column:id;primaryKey;autoIncrement"`
 	RefundID               string     `gorm:"column:refund_id;type:text;not null;unique"`
+	PaymentRefundID        string     `gorm:"column:payment_refund_id;type:text"`
 	PaymentID              string     `gorm:"column:payment_id;type:text;not null"`
+	LoanID                 string     `gorm:"column:loan_id;type:text"`
 	UserID                 string     `gorm:"column:user_id;type:text;not null"`
 	Lender                 string     `gorm:"column:lender;type:text;not null"`
 	Amount                 float64    `gorm:"column:amount;type:numeric(14,2);not null"`

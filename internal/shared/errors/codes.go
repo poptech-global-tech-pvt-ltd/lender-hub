@@ -31,9 +31,10 @@ const (
 	CodeVerificationExhaust = "VERIFICATION_ATTEMPT_LIMIT_EXHAUSTED"
 
 	// Order-specific
-	CodeIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
-	CodeHashMismatch        = "IDEMPOTENCY_HASH_MISMATCH"
-	CodeOrderNotFound       = "ORDER_NOT_FOUND"
+	CodeIdempotencyConflict  = "IDEMPOTENCY_CONFLICT"
+	CodeHashMismatch         = "IDEMPOTENCY_HASH_MISMATCH"
+	CodeOrderNotFound        = "ORDER_NOT_FOUND"
+	CodeOrderNotRefundable   = "PAYIN3_ORDER_NOT_REFUNDABLE"
 
 	// Refund-specific
 	CodeRefundNotFound     = "REFUND_NOT_FOUND"

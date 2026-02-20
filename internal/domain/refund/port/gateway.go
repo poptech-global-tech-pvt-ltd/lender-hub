@@ -1,17 +1,30 @@
 package port
 
-import (
-	"context"
+import "context"
 
-	res "lending-hub-service/internal/domain/refund/dto/response"
-)
+// ProcessRefundRequest holds data for a refund API call
+type ProcessRefundRequest struct {
+	MerchantTxnID string  // order's loanId = merchantTxnId at Lazypay
+	Amount        float64
+	Currency      string
+	RefundTxnID   string  // our refundId = refundTxnId sent to Lazypay
+}
+
+// ProcessRefundResponse holds the Lazypay refund API response
+type ProcessRefundResponse struct {
+	Status      string // REFUND_SUCCESS or error code
+	LpTxnID     string // Lazypay's REFUND transaction lpTxnId
+	ParentTxnID string // Lazypay's SALE transaction lpTxnId
+	RespMessage string
+	ErrorCode   string // LPDUPLICATEREFUND etc.
+	IsTimeout   bool
+}
 
 // RefundGateway abstracts external refund provider calls
 type RefundGateway interface {
-	// ProcessRefund processes a refund and returns response + generated refundTxnId
-	ProcessRefund(ctx context.Context, merchantTxnID string, amount float64, currency string) (*res.RefundResponse, string, error)
-	
-	// EnquireRefund queries the provider for refund status using merchantTxnID
+	// ProcessRefund single attempt — no retry
+	ProcessRefund(ctx context.Context, req ProcessRefundRequest) (*ProcessRefundResponse, error)
+	// EnquireRefund queries the provider using order's loanId as merchantTxnId
 	EnquireRefund(ctx context.Context, merchantTxnID string) (*EnquiryResponse, error)
 }
 

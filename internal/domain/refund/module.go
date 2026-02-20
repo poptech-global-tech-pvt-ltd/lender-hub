@@ -1,53 +1,62 @@
 package refund
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
 	orderPort "lending-hub-service/internal/domain/order/port"
-	orderRepoPkg "lending-hub-service/internal/domain/order/repository"
 	"lending-hub-service/internal/domain/refund/handler"
 	refundPort "lending-hub-service/internal/domain/refund/port"
 	"lending-hub-service/internal/domain/refund/repository"
 	"lending-hub-service/internal/domain/refund/service"
-	"lending-hub-service/internal/domain/refund/stub"
+	"lending-hub-service/internal/infrastructure/observability/metrics"
 	profileService "lending-hub-service/internal/domain/profile/service"
+	baseLogger "lending-hub-service/pkg/logger"
+	"lending-hub-service/pkg/idgen"
 )
 
 // Module wires together all refund module components
 type Module struct {
-	Service *service.RefundService
+	createHandler        *handler.CreateRefundHandler
+	getHandler           *handler.GetRefundHandler
+	getByRefundIDHandler *handler.GetRefundByRefundIDHandler
+	listForOrderHandler  *handler.ListRefundsForOrderHandler
+	listByUserHandler    *handler.ListRefundsByUserHandler
 }
 
 // NewModule creates a new refund module with dependencies
 func NewModule(
 	db *gorm.DB,
-	gw refundPort.RefundGateway,
 	orderRepo orderPort.OrderRepository,
+	orderGateway orderPort.OrderGateway,
+	gateway refundPort.RefundGateway,
+	cache refundPort.RefundCache,
 	profileUpdater *profileService.ProfileUpdater,
+	mc metrics.MetricsClient,
+	logger *baseLogger.Logger,
+	idgen *idgen.Generator,
+	enquirySLA time.Duration,
 ) *Module {
-	refundRepo := repository.NewRefundRepository(db)
-	mappingRepo := orderRepoPkg.NewPaymentMappingRepository(db)
-	svc := service.NewRefundService(refundRepo, orderRepo, mappingRepo, gw, profileUpdater)
+	repo := repository.NewRefundRepository(db)
+	enquirySvc := service.NewRefundEnquiryService(gateway, repo, cache, mc, logger, enquirySLA)
+	refundSvc := service.NewRefundService(repo, orderRepo, orderGateway, gateway, cache, enquirySvc, profileUpdater, mc, logger, idgen)
+
 	return &Module{
-		Service: svc,
+		createHandler:        handler.NewCreateRefundHandler(refundSvc),
+		getHandler:           handler.NewGetRefundHandler(refundSvc),
+		getByRefundIDHandler: handler.NewGetRefundByRefundIDHandler(refundSvc),
+		listForOrderHandler:  handler.NewListRefundsForOrderHandler(refundSvc),
+		listByUserHandler:    handler.NewListRefundsByUserHandler(refundSvc),
 	}
 }
 
-// NewModuleWithStubs creates a new refund module with stub implementations
-func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater) *Module {
-	gw := stub.NewStubRefundGateway()
-	orderRepo := orderRepoPkg.NewOrderRepository(db)
-	return NewModule(db, gw, orderRepo, profileUpdater)
-}
-
-// RegisterRoutes registers refund module routes
+// RegisterRoutes registers refund routes (static segments before parameterised)
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
-	createHandler := handler.NewCreateRefundHandler(m.Service)
-	callbackHandler := handler.NewRefundCallbackHandler(m.Service)
-	getHandler := handler.NewGetRefundHandler(m.Service)
-
-	rg.POST("/refund", createHandler.Handle)
-	rg.GET("/refund/:refundId", getHandler.Handle)
-	rg.POST("/callback/refund", callbackHandler.Handle)
+	rg.POST("/refund", m.createHandler.Handle)
+	rg.GET("/refund/loan/:refundId", m.getByRefundIDHandler.Handle)
+	rg.GET("/refund/:paymentRefundId", m.getHandler.Handle)
+	rg.GET("/refunds", m.listForOrderHandler.Handle)
+	rg.GET("/refunds/user", m.listByUserHandler.Handle)
 }

@@ -11,27 +11,27 @@ import (
 	"lending-hub-service/internal/shared/response"
 )
 
-// GetRefundHandler handles GET /refund/:paymentRefundId (by POP's paymentRefundId)
-type GetRefundHandler struct {
+// GetRefundByRefundIDHandler handles GET /refund/loan/:refundId (by our generated refundId)
+type GetRefundByRefundIDHandler struct {
 	service *service.RefundService
 }
 
-// NewGetRefundHandler creates a new GetRefundHandler
-func NewGetRefundHandler(svc *service.RefundService) *GetRefundHandler {
-	return &GetRefundHandler{service: svc}
+// NewGetRefundByRefundIDHandler creates a new GetRefundByRefundIDHandler
+func NewGetRefundByRefundIDHandler(svc *service.RefundService) *GetRefundByRefundIDHandler {
+	return &GetRefundByRefundIDHandler{service: svc}
 }
 
-// Handle processes get by paymentRefundId
-func (h *GetRefundHandler) Handle(c *gin.Context) {
+// Handle processes get by refundId
+func (h *GetRefundByRefundIDHandler) Handle(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
-	paymentRefundID := c.Param("paymentRefundId")
-	if paymentRefundID == "" {
-		status, envelope := response.Error(http.StatusBadRequest, sharedErrors.CodeInvalidRequest, "paymentRefundId is required", requestID)
+	refundID := c.Param("refundId")
+	if refundID == "" {
+		status, envelope := response.Error(http.StatusBadRequest, sharedErrors.CodeInvalidRequest, "refundId is required", requestID)
 		c.JSON(status, envelope)
 		return
 	}
 
-	refund, err := h.service.GetByPaymentRefundID(c.Request.Context(), paymentRefundID)
+	refund, err := h.service.GetByRefundID(c.Request.Context(), refundID)
 	if err != nil {
 		if de, ok := err.(*sharedErrors.DomainError); ok {
 			status, envelope := response.Error(de.Status, de.Code, de.Message, requestID)

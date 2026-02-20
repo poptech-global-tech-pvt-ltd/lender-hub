@@ -6,14 +6,15 @@ import (
 
 	"lending-hub-service/internal/domain/refund/entity"
 	"lending-hub-service/internal/domain/refund/port"
-	baseLogger "lending-hub-service/pkg/logger"
 	"lending-hub-service/internal/infrastructure/observability/metrics"
+	baseLogger "lending-hub-service/pkg/logger"
 )
 
 // RefundEnquiryService handles enquiry-based resolution of refund states
 type RefundEnquiryService struct {
 	gateway    port.RefundGateway
 	repository port.RefundRepository
+	cache      port.RefundCache
 	mc         metrics.MetricsClient
 	logger     *baseLogger.Logger
 	enquirySLA time.Duration
@@ -23,6 +24,7 @@ type RefundEnquiryService struct {
 func NewRefundEnquiryService(
 	gateway port.RefundGateway,
 	repository port.RefundRepository,
+	cache port.RefundCache,
 	mc metrics.MetricsClient,
 	logger *baseLogger.Logger,
 	enquirySLA time.Duration,
@@ -30,41 +32,46 @@ func NewRefundEnquiryService(
 	return &RefundEnquiryService{
 		gateway:    gateway,
 		repository: repository,
+		cache:      cache,
 		mc:         mc,
 		logger:     logger,
 		enquirySLA: enquirySLA,
 	}
 }
 
-// ResolveRefundState calls enquiry API and updates refund based on response
+// ResolveRefundState calls enquiry using order's loanId and updates refund
 func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *entity.Refund) error {
-	s.logger.Info("resolving refund via enquiry",
-		baseLogger.RefundID(refund.RefundID),
-		baseLogger.Status(string(refund.Status)),
-	)
-
-	if refund.ProviderMerchantTxnID == nil || *refund.ProviderMerchantTxnID == "" {
-		s.logger.Warn("cannot resolve refund: missing provider_merchant_txn_id",
+	merchantTxnID := refund.LoanID
+	if merchantTxnID == "" && refund.ProviderMerchantTxnID != nil {
+		merchantTxnID = *refund.ProviderMerchantTxnID
+	}
+	if merchantTxnID == "" {
+		s.logger.Warn("cannot resolve refund: missing loanId",
 			baseLogger.RefundID(refund.RefundID),
 		)
 		return nil
 	}
 
-	// Call Lazypay enquiry API
-	resp, err := s.gateway.EnquireRefund(ctx, *refund.ProviderMerchantTxnID)
+	resp, err := s.gateway.EnquireRefund(ctx, merchantTxnID)
 	if err != nil {
 		s.logger.Error("enquiry API failed",
 			baseLogger.RefundID(refund.RefundID),
 			baseLogger.ErrorCode(err.Error()),
 		)
-		return err
+		return nil // soft fail
 	}
 
-	// Find REFUND transaction matching our provider_refund_ref_id
 	var refundTxn *port.EnquiryTransaction
 	for i := range resp.Transactions {
 		txn := &resp.Transactions[i]
-		if txn.TxnType == "REFUND" && txn.TxnRefNo == refund.ProviderRefundRefID {
+		if txn.TxnType != "REFUND" {
+			continue
+		}
+		if txn.TxnRefNo != "" && txn.TxnRefNo == refund.RefundID {
+			refundTxn = txn
+			break
+		}
+		if txn.TxnRefNo == "" && refund.ProviderRefundTxnID != nil && txn.LpTxnID == *refund.ProviderRefundTxnID {
 			refundTxn = txn
 			break
 		}
@@ -73,63 +80,41 @@ func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *e
 	refund.RecordEnquiry()
 
 	if refundTxn == nil {
-		// Refund not found in enquiry
 		if time.Since(refund.CreatedAt) > s.enquirySLA {
-			// Past SLA, mark as FAILED
-			refund.MarkFailed("REFUND_NOT_FOUND_IN_ENQUIRY",
-				"Refund not visible at lender after SLA")
-			s.logger.Warn("refund not found after SLA, marking FAILED",
-				baseLogger.RefundID(refund.RefundID),
-			)
+			refund.MarkFailed("REFUND_NOT_FOUND_IN_ENQUIRY", "Refund not visible at lender after SLA")
 		} else {
-			// Still within SLA, keep current state (or mark UNKNOWN if PENDING)
-			if refund.Status == entity.RefundStatusPending {
+			if refund.Status != entity.RefundStatusUnknown {
 				refund.MarkUnknown("Refund not yet visible in enquiry")
 			}
-			s.logger.Info("refund not found in enquiry, within SLA",
-				baseLogger.RefundID(refund.RefundID),
-			)
 		}
 	} else {
-		// Refund found in enquiry
 		switch refundTxn.Status {
 		case "SUCCESS":
 			refund.MarkSuccess(refundTxn.LpTxnID, "", refundTxn.RespMessage)
-			s.mc.Count(metrics.MetricRefundCompleted, 1, []string{
-				"provider:" + refund.Lender,
-			})
-			s.logger.Info("refund resolved as SUCCESS via enquiry",
-				baseLogger.RefundID(refund.RefundID),
-			)
+			s.mc.Count(metrics.MetricRefundCompleted, 1, []string{"provider:" + refund.Lender})
 		case "FAILED":
 			refund.MarkFailed(refundTxn.Status, refundTxn.RespMessage)
-			s.logger.Info("refund resolved as FAILED via enquiry",
-				baseLogger.RefundID(refund.RefundID),
-			)
 		case "PROCESSING":
 			refund.MarkProcessing(refundTxn.RespMessage)
-			s.logger.Info("refund still PROCESSING per enquiry",
-				baseLogger.RefundID(refund.RefundID),
-			)
 		default:
 			refund.MarkFailed(refundTxn.Status, refundTxn.RespMessage)
-			s.logger.Warn("unknown enquiry status, marking FAILED",
-				baseLogger.RefundID(refund.RefundID),
-				baseLogger.Status(refundTxn.Status),
-			)
 		}
 	}
 
-	// Persist updated state
 	if err := s.repository.Update(ctx, refund); err != nil {
-		s.logger.Error("failed to update refund after enquiry",
-			baseLogger.RefundID(refund.RefundID),
-			baseLogger.ErrorCode(err.Error()),
-		)
 		return err
 	}
 
-	// TODO: If SUCCESS, trigger async limit restoration (Kafka event or direct call)
+	ttl := 30 * time.Second
+	if refund.Status.IsTerminal() {
+		ttl = 5 * time.Minute
+	}
+	_ = s.cache.Set(ctx, refund.RefundID, refund.Status, ttl)
+
+	s.logger.Info("refund state resolved via enquiry",
+		baseLogger.RefundID(refund.RefundID),
+		baseLogger.Status(string(refund.Status)),
+	)
 
 	return nil
 }

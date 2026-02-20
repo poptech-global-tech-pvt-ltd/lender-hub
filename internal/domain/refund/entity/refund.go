@@ -6,7 +6,9 @@ import "time"
 type Refund struct {
 	ID                     int64
 	RefundID               string
+	PaymentRefundID        string
 	PaymentID              string
+	LoanID                 string
 	UserID                 string
 	Lender                 string
 	Amount                 float64

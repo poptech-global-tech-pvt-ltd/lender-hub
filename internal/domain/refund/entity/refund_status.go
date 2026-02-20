@@ -16,7 +16,15 @@ func (s RefundStatus) IsTerminal() bool {
 	return s == RefundStatusSuccess || s == RefundStatusFailed
 }
 
-// IsResolvable returns true if the status can be resolved via enquiry (UNKNOWN or PROCESSING)
+// IsResolvable returns true if the status can be resolved via enquiry (PENDING, UNKNOWN, PROCESSING)
 func (s RefundStatus) IsResolvable() bool {
-	return s == RefundStatusUnknown || s == RefundStatusProcessing
+	return s == RefundStatusUnknown || s == RefundStatusProcessing || s == RefundStatusPending
+}
+
+// OrDefault returns PENDING if empty
+func (s RefundStatus) OrDefault() RefundStatus {
+	if s == "" {
+		return RefundStatusPending
+	}
+	return s
 }

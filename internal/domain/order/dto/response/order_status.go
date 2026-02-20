@@ -12,10 +12,11 @@ type EmiDetail struct {
 	FirstEmiDueDate    string  `json:"firstEmiDueDate"`
 }
 
-// OrderStatusResponse is returned by GET /v1/payin3/order/:paymentId
+// OrderStatusResponse is returned by GET order (by paymentId, loanId, or lenderOrderId)
 type OrderStatusResponse struct {
-	PaymentID        string     `json:"paymentId"`
-	Status           string     `json:"status"` // NEVER empty: PENDING|SUCCESS|FAILED|REFUNDED|EXPIRED|CANCELLED
+	LoanID           string     `json:"loanId,omitempty"`       // our ID (lps_xxx)
+	PaymentID        string     `json:"paymentId"`              // POP's ID
+	Status           string     `json:"status"`                 // NEVER empty: PENDING|SUCCESS|FAILED|REFUNDED|EXPIRED|CANCELLED
 	LenderOrderID    string     `json:"lenderOrderId,omitempty"`
 	Amount           float64    `json:"amount"`
 	Currency         string     `json:"currency"`

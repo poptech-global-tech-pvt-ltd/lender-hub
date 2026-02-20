@@ -45,6 +45,36 @@ func (r *postgresOrderRepository) GetByPaymentID(ctx context.Context, paymentID 
 	return toOrderEntity(&model), nil
 }
 
+// GetByLoanID retrieves an order by lender_merchant_txn_id (loanId = lps_xxx)
+func (r *postgresOrderRepository) GetByLoanID(ctx context.Context, loanID string) (*entity.Order, error) {
+	var model infra.LenderPaymentState
+	err := r.db.WithContext(ctx).
+		Where("lender_merchant_txn_id = ?", loanID).
+		First(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toOrderEntity(&model), nil
+}
+
+// GetByLenderOrderID retrieves an order by lender_order_id (Lazypay's orderId) — recon, no enquiry
+func (r *postgresOrderRepository) GetByLenderOrderID(ctx context.Context, lenderOrderID string) (*entity.Order, error) {
+	var model infra.LenderPaymentState
+	err := r.db.WithContext(ctx).
+		Where("lender_order_id = ?", lenderOrderID).
+		First(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toOrderEntity(&model), nil
+}
+
 // GetForUpdate retrieves an order with row lock for update
 func (r *postgresOrderRepository) GetForUpdate(ctx context.Context, paymentID string) (*entity.Order, error) {
 	var model infra.LenderPaymentState

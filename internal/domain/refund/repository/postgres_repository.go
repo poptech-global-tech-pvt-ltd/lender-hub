@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	infra "lending-hub-service/internal/infrastructure/postgres"
 	"lending-hub-service/internal/domain/refund/entity"
@@ -32,23 +33,6 @@ func (r *postgresRefundRepository) GetByRefundID(ctx context.Context, refundID s
 	var model infra.LenderRefund
 	err := r.db.WithContext(ctx).
 		Where("refund_id = ?", refundID).
-		First(&model).Error
-
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	return toEntity(&model), nil
-}
-
-// GetByProviderRefID retrieves a refund by lender and provider_refund_ref_id (idempotency check)
-func (r *postgresRefundRepository) GetByProviderRefID(ctx context.Context, lender, providerRefID string) (*entity.Refund, error) {
-	var model infra.LenderRefund
-	err := r.db.WithContext(ctx).
-		Where("lender = ? AND provider_refund_ref_id = ?", lender, providerRefID).
 		First(&model).Error
 
 	if err != nil {
@@ -89,12 +73,94 @@ func (r *postgresRefundRepository) Update(ctx context.Context, refund *entity.Re
 		Updates(&model).Error
 }
 
+// GetByPaymentRefundID retrieves a refund by lender and payment_refund_id
+func (r *postgresRefundRepository) GetByPaymentRefundID(ctx context.Context, lender, paymentRefundID string) (*entity.Refund, error) {
+	var model infra.LenderRefund
+	err := r.db.WithContext(ctx).
+		Where("lender = ? AND payment_refund_id = ?", lender, paymentRefundID).
+		First(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toEntity(&model), nil
+}
+
+// GetForUpdateByPaymentRefundID retrieves a refund by lender and payment_refund_id with row lock
+func (r *postgresRefundRepository) GetForUpdateByPaymentRefundID(ctx context.Context, lender, paymentRefundID string) (*entity.Refund, error) {
+	var model infra.LenderRefund
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("lender = ? AND payment_refund_id = ?", lender, paymentRefundID).
+		First(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toEntity(&model), nil
+}
+
+// GetForUpdateByRefundID retrieves a refund by refund_id with row lock
+func (r *postgresRefundRepository) GetForUpdateByRefundID(ctx context.Context, refundID string) (*entity.Refund, error) {
+	var model infra.LenderRefund
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("refund_id = ?", refundID).
+		First(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return toEntity(&model), nil
+}
+
+// ListByUserID lists refunds for a user with pagination
+func (r *postgresRefundRepository) ListByUserID(ctx context.Context, userID string, page, perPage int) ([]*entity.Refund, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 || perPage > 100 {
+		perPage = 20
+	}
+	offset := (page - 1) * perPage
+
+	var total int64
+	if err := r.db.WithContext(ctx).Model(&infra.LenderRefund{}).Where("user_id = ?", userID).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var models []infra.LenderRefund
+	err := r.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Limit(perPage).
+		Offset(offset).
+		Find(&models).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	refunds := make([]*entity.Refund, len(models))
+	for i, model := range models {
+		refunds[i] = toEntity(&model)
+	}
+	return refunds, int(total), nil
+}
+
 // toEntity converts GORM model to domain entity
 func toEntity(model *infra.LenderRefund) *entity.Refund {
 	refund := &entity.Refund{
 		ID:                     model.ID,
 		RefundID:               model.RefundID,
+		PaymentRefundID:        model.PaymentRefundID,
 		PaymentID:              model.PaymentID,
+		LoanID:                 model.LoanID,
 		UserID:                 model.UserID,
 		Lender:                 model.Lender,
 		Amount:                 model.Amount,
@@ -132,7 +198,9 @@ func toModel(e *entity.Refund) *infra.LenderRefund {
 	return &infra.LenderRefund{
 		ID:                     e.ID,
 		RefundID:               e.RefundID,
+		PaymentRefundID:        e.PaymentRefundID,
 		PaymentID:              e.PaymentID,
+		LoanID:                 e.LoanID,
 		UserID:                 e.UserID,
 		Lender:                 e.Lender,
 		Amount:                 e.Amount,
