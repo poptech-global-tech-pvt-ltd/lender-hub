@@ -9,6 +9,7 @@ import (
 	"lending-hub-service/internal/domain/order/repository"
 	"lending-hub-service/internal/domain/order/service"
 	"lending-hub-service/internal/domain/order/stub"
+	refundPort "lending-hub-service/internal/domain/refund/port"
 	"lending-hub-service/pkg/idgen"
 	baseLogger "lending-hub-service/pkg/logger"
 )
@@ -16,6 +17,7 @@ import (
 // Module wires together all order module components
 type Module struct {
 	Service          *service.OrderService
+	summaryHandler   *handler.OrderSummaryHandler
 	internalAPIToken string
 	logger           *baseLogger.Logger
 }
@@ -30,6 +32,7 @@ func NewModule(
 	contactResolver port.ContactResolver,
 	merchantID string,
 	internalAPIToken string,
+	refundRepo refundPort.RefundRepository,
 	logger *baseLogger.Logger,
 ) *Module {
 	orderRepo := repository.NewOrderRepository(db)
@@ -37,8 +40,10 @@ func NewModule(
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	idempotencySvc := service.NewIdempotencyService(idempotencyRepo)
 	svc := service.NewOrderService(orderRepo, mappingRepo, idempotencySvc, gw, profileUpdater, publisher, idgen, contactResolver, merchantID, logger)
+	summarySvc := service.NewOrderSummaryService(svc, refundRepo, logger)
 	return &Module{
 		Service:          svc,
+		summaryHandler:   handler.NewOrderSummaryHandler(summarySvc),
 		internalAPIToken: internalAPIToken,
 		logger:           logger,
 	}
@@ -50,15 +55,15 @@ func NewStubOrderEventPublisher() port.OrderEventPublisher {
 }
 
 // NewModuleWithStubs creates a new order module with stub implementations
-func NewModuleWithStubs(db *gorm.DB, profileUpdater port.ProfileUpdater, idgen *idgen.Generator, contactResolver port.ContactResolver, merchantID, internalAPIToken string, logger *baseLogger.Logger) *Module {
+func NewModuleWithStubs(db *gorm.DB, profileUpdater port.ProfileUpdater, idgen *idgen.Generator, contactResolver port.ContactResolver, merchantID, internalAPIToken string, refundRepo refundPort.RefundRepository, logger *baseLogger.Logger) *Module {
 	gw := stub.NewStubOrderGateway()
 	publisher := stub.NewStubOrderEventPublisher()
-	return NewModule(db, gw, profileUpdater, publisher, idgen, contactResolver, merchantID, internalAPIToken, logger)
+	return NewModule(db, gw, profileUpdater, publisher, idgen, contactResolver, merchantID, internalAPIToken, refundRepo, logger)
 }
 
 // RegisterRoutes registers order module routes
 // NOTE: No POST /callback/order — callbacks come via Kafka consumer
-// Route order: more specific paths first (loan, recon) before /order/:paymentId
+// Route order: more specific paths first (loan, recon, summary) before /order/:paymentId
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 	createHandler := handler.NewCreateOrderHandler(m.Service, m.logger)
 	getHandler := handler.NewGetOrderHandler(m.Service)
@@ -71,6 +76,7 @@ func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/order", createHandler.Handle)
 	rg.GET("/order/loan/:loanId", getByLoanHandler.Handle)
 	rg.GET("/order/recon/:lenderOrderId", getByReconHandler.Handle)
+	rg.GET("/order/:paymentId/summary", m.summaryHandler.Handle)
 	rg.GET("/order/:paymentId", getHandler.Handle)
 	rg.GET("/orders", listHandler.Handle)
 	rg.PATCH("/order/loan/:loanId/status", supportByLoanHandler.Handle)

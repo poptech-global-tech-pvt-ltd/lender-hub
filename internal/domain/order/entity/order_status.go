@@ -31,7 +31,7 @@ func (s OrderStatus) NormalizeForDB() OrderStatus {
 }
 
 func (s OrderStatus) IsEmpty() bool {
-	return s == ""
+	return s == "" || s == "NULL" || s == "null"
 }
 
 func (s OrderStatus) OrDefault() OrderStatus {

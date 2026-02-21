@@ -253,9 +253,8 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	return response, nil
 }
 
-// GetOrderStatus retrieves order by POP's paymentId (primary polling)
-// If order is non-terminal, calls Lazypay enquiry to refresh status and persists updates
-func (s *OrderService) GetOrderStatus(ctx context.Context, paymentID string) (*res.OrderStatusResponse, error) {
+// GetByPaymentID retrieves order by paymentId, runs enquiry if non-terminal, returns entity
+func (s *OrderService) GetByPaymentID(ctx context.Context, paymentID string) (*entity.Order, error) {
 	order, err := s.orderRepo.GetByPaymentID(ctx, paymentID)
 	if err != nil {
 		return nil, err
@@ -263,15 +262,25 @@ func (s *OrderService) GetOrderStatus(ctx context.Context, paymentID string) (*r
 	if order == nil {
 		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order not found")
 	}
+	order.Status = order.Status.OrDefault()
+	if string(order.Status) == "NULL" || string(order.Status) == "null" {
+		order.Status = entity.OrderPending
+	}
 	if err := s.resolveOrderFromEnquiry(ctx, order); err != nil {
 		// Soft fail: return current DB state
 	}
-	return s.orderToStatusResponse(order), nil
+	order, _ = s.orderRepo.GetByPaymentID(ctx, paymentID)
+	if order != nil {
+		order.Status = order.Status.OrDefault()
+		if string(order.Status) == "NULL" || string(order.Status) == "null" {
+			order.Status = entity.OrderPending
+		}
+	}
+	return order, nil
 }
 
-// GetOrderStatusByLoanID retrieves order by our loanId (internal/support)
-// If order is non-terminal, calls Lazypay enquiry to refresh status and persists updates
-func (s *OrderService) GetOrderStatusByLoanID(ctx context.Context, loanID string) (*res.OrderStatusResponse, error) {
+// GetByLoanID retrieves order by loanId, runs enquiry if non-terminal, returns entity
+func (s *OrderService) GetByLoanID(ctx context.Context, loanID string) (*entity.Order, error) {
 	order, err := s.orderRepo.GetByLoanID(ctx, loanID)
 	if err != nil {
 		return nil, err
@@ -279,8 +288,39 @@ func (s *OrderService) GetOrderStatusByLoanID(ctx context.Context, loanID string
 	if order == nil {
 		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order not found")
 	}
+	order.Status = order.Status.OrDefault()
+	if string(order.Status) == "NULL" || string(order.Status) == "null" {
+		order.Status = entity.OrderPending
+	}
 	if err := s.resolveOrderFromEnquiry(ctx, order); err != nil {
-		// Soft fail: return current DB state
+		// Soft fail
+	}
+	order, _ = s.orderRepo.GetByLoanID(ctx, loanID)
+	if order != nil {
+		order.Status = order.Status.OrDefault()
+		if string(order.Status) == "NULL" || string(order.Status) == "null" {
+			order.Status = entity.OrderPending
+		}
+	}
+	return order, nil
+}
+
+// GetOrderStatus retrieves order by POP's paymentId (primary polling)
+// If order is non-terminal, calls Lazypay enquiry to refresh status and persists updates
+func (s *OrderService) GetOrderStatus(ctx context.Context, paymentID string) (*res.OrderStatusResponse, error) {
+	order, err := s.GetByPaymentID(ctx, paymentID)
+	if err != nil {
+		return nil, err
+	}
+	return s.orderToStatusResponse(order), nil
+}
+
+// GetOrderStatusByLoanID retrieves order by our loanId (internal/support)
+// If order is non-terminal, calls Lazypay enquiry to refresh status and persists updates
+func (s *OrderService) GetOrderStatusByLoanID(ctx context.Context, loanID string) (*res.OrderStatusResponse, error) {
+	order, err := s.GetByLoanID(ctx, loanID)
+	if err != nil {
+		return nil, err
 	}
 	return s.orderToStatusResponse(order), nil
 }
@@ -331,6 +371,34 @@ func (s *OrderService) GetOrderStatusByLenderOrderID(ctx context.Context, lender
 	return s.orderToStatusResponse(order), nil
 }
 
+func parseEmiPlan(data []byte) *res.EmiDetail {
+	if len(data) == 0 || string(data) == "null" || string(data) == "{}" {
+		return nil
+	}
+	var parsed struct {
+		Tenure             int     `json:"tenure"`
+		EMI                float64 `json:"emi"`
+		InterestRate       float64 `json:"interestRate"`
+		Principal          float64 `json:"principal"`
+		TotalPayableAmount float64 `json:"totalPayableAmount"`
+		FirstEmiDueDate    string  `json:"firstEmiDueDate"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil
+	}
+	if parsed.Tenure == 0 && parsed.EMI == 0 {
+		return nil
+	}
+	return &res.EmiDetail{
+		Tenure:             parsed.Tenure,
+		EMI:                parsed.EMI,
+		InterestRate:       parsed.InterestRate,
+		Principal:          parsed.Principal,
+		TotalPayableAmount: parsed.TotalPayableAmount,
+		FirstEmiDueDate:    parsed.FirstEmiDueDate,
+	}
+}
+
 func (s *OrderService) orderToStatusResponse(order *entity.Order) *res.OrderStatusResponse {
 	loanID := ""
 	if order.LenderMerchantTxnID != nil {
@@ -356,27 +424,7 @@ func (s *OrderService) orderToStatusResponse(order *entity.Order) *res.OrderStat
 	if order.LastErrorMessage != nil {
 		lastErrMsg = *order.LastErrorMessage
 	}
-	var emi *res.EmiDetail
-	if len(order.EMIPlan) > 0 {
-		var parsed struct {
-			Tenure             int     `json:"tenure"`
-			EMI                float64 `json:"emi"`
-			InterestRate       float64 `json:"interestRate"`
-			Principal          float64 `json:"principal"`
-			TotalPayableAmount float64 `json:"totalPayableAmount"`
-			FirstEmiDueDate    string  `json:"firstEmiDueDate"`
-		}
-		if err := json.Unmarshal(order.EMIPlan, &parsed); err == nil {
-			emi = &res.EmiDetail{
-				Tenure:             parsed.Tenure,
-				EMI:                parsed.EMI,
-				InterestRate:       parsed.InterestRate,
-				Principal:          parsed.Principal,
-				TotalPayableAmount: parsed.TotalPayableAmount,
-				FirstEmiDueDate:    parsed.FirstEmiDueDate,
-			}
-		}
-	}
+	emi := parseEmiPlan(order.EMIPlan)
 	return &res.OrderStatusResponse{
 		LoanID:            loanID,
 		PaymentID:         order.PaymentID,

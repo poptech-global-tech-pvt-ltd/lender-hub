@@ -30,6 +30,11 @@ func NewUserContactResolver(
 	}
 }
 
+// GetContact implements port.ContactResolver
+func (r *UserContactResolver) GetContact(ctx context.Context, userID string) (*entity.UserContact, error) {
+	return r.Resolve(ctx, userID)
+}
+
 // Resolve returns mobile + email for a given userId.
 // Strategy: local DB first → external profile service → upsert → return
 // Returns error if mobile cannot be resolved.

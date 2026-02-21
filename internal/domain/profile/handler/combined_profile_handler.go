@@ -42,15 +42,15 @@ func (h *CombinedProfileHandler) Handle(c *gin.Context) {
 
 	currency := c.DefaultQuery("currency", "INR")
 
-	var amount *float64
+	var amount float64
 	if amtStr := c.Query("amount"); amtStr != "" {
-		amt, err := strconv.ParseFloat(amtStr, 64)
-		if err != nil || amt <= 0 {
+		parsed, err := strconv.ParseFloat(amtStr, 64)
+		if err != nil || parsed <= 0 {
 			status, envelope := response.Error(http.StatusBadRequest, sharedErrors.CodeInvalidRequest, "amount must be a positive number", requestID)
 			c.JSON(status, envelope)
 			return
 		}
-		amount = &amt
+		amount = parsed
 	}
 
 	resp, err := h.service.GetCombinedProfile(c.Request.Context(), userID, amount, currency, source)

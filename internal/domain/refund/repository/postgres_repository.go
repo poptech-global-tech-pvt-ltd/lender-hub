@@ -65,6 +65,23 @@ func (r *postgresRefundRepository) ListByPaymentID(ctx context.Context, paymentI
 	return refunds, nil
 }
 
+// ListByLoanID lists all refunds for an order by loanId
+func (r *postgresRefundRepository) ListByLoanID(ctx context.Context, loanID string) ([]*entity.Refund, error) {
+	var models []infra.LenderRefund
+	err := r.db.WithContext(ctx).
+		Where("loan_id = ?", loanID).
+		Order("created_at ASC").
+		Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	refunds := make([]*entity.Refund, len(models))
+	for i, model := range models {
+		refunds[i] = toEntity(&model)
+	}
+	return refunds, nil
+}
+
 // Update updates an existing refund record
 func (r *postgresRefundRepository) Update(ctx context.Context, refund *entity.Refund) error {
 	model := toModel(refund)

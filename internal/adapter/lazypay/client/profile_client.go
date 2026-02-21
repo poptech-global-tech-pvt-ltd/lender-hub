@@ -12,7 +12,7 @@ import (
 	"lending-hub-service/internal/adapter/lazypay/dto/response"
 	"lending-hub-service/internal/adapter/lazypay/mapper"
 	"lending-hub-service/internal/adapter/lazypay/signature"
-	profileResp "lending-hub-service/internal/domain/profile/dto/response"
+	profilePort "lending-hub-service/internal/domain/profile/port"
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
@@ -45,7 +45,7 @@ func NewProfileClient(
 }
 
 // CheckEligibility implements ProfileGateway.CheckEligibility
-func (c *ProfileClient) CheckEligibility(ctx context.Context, mobile, email string, amount float64) (*profileResp.EligibilityResponse, error) {
+func (c *ProfileClient) CheckEligibility(ctx context.Context, mobile, email string, amount float64) (*profilePort.EligibilityResult, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
@@ -94,12 +94,11 @@ func (c *ProfileClient) CheckEligibility(ctx context.Context, mobile, email stri
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response (userID set by service layer)
-	return mapper.FromLPEligibilityResponse(&lpResp, ""), nil
+	return mapper.MapEligibilityResponse(&lpResp), nil
 }
 
 // GetCustomerStatus implements ProfileGateway.GetCustomerStatus
-func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile, email string) (*profileResp.CustomerStatusResponse, error) {
+func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile, email string) (*profilePort.CustomerStatusResult, error) {
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
@@ -146,8 +145,7 @@ func (c *ProfileClient) GetCustomerStatus(ctx context.Context, mobile, email str
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to unmarshal response: "+err.Error())
 	}
 
-	// Map to canonical response (userID set by service layer)
-	return mapper.FromLPCustomerStatusResponse(&lpResp, ""), nil
+	return mapper.MapCustomerStatusResponse(&lpResp), nil
 }
 
 // handleProfileAPIError parses LP error response and returns DomainError

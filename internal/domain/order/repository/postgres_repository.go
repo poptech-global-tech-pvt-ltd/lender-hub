@@ -189,6 +189,14 @@ func (r *postgresPaymentMappingRepository) GetByPaymentID(ctx context.Context, p
 
 // toOrderEntity converts GORM model to domain entity
 func toOrderEntity(model *infra.LenderPaymentState) *entity.Order {
+	status := entity.OrderStatus(model.Status)
+	if status == "" || status == "NULL" || status == "null" {
+		status = entity.OrderPending
+	}
+	lenderLastStatus := model.LenderLastStatus
+	if lenderLastStatus != nil && (*lenderLastStatus == "NULL" || *lenderLastStatus == "" || *lenderLastStatus == "null") {
+		lenderLastStatus = nil
+	}
 	return &entity.Order{
 		ID:                   model.ID,
 		PaymentID:            model.PaymentID,
@@ -197,13 +205,13 @@ func toOrderEntity(model *infra.LenderPaymentState) *entity.Order {
 		Lender:               model.Lender,
 		Amount:               model.Amount,
 		Currency:             model.Currency,
-		Status:               entity.OrderStatus(model.Status),
+		Status:               status,
 		Source:               model.Source,
 		ReturnURL:            model.ReturnURL,
 		EMIPlan:              model.EMIPlan,
 		LenderOrderID:        model.LenderOrderID,
 		LenderMerchantTxnID:  model.LenderMerchantTxnID,
-		LenderLastStatus:     model.LenderLastStatus,
+		LenderLastStatus:     lenderLastStatus,
 		LenderLastTxnID:      model.LenderLastTxnID,
 		LenderLastTxnStatus:  model.LenderLastTxnStatus,
 		LenderLastTxnMessage: model.LenderLastTxnMessage,
@@ -217,6 +225,8 @@ func toOrderEntity(model *infra.LenderPaymentState) *entity.Order {
 
 // toOrderModel converts domain entity to GORM model
 func toOrderModel(e *entity.Order) *infra.LenderPaymentState {
+	// Normalize status: empty, "NULL", or invalid values → PENDING; COMPLETE → SUCCESS
+	status := entity.OrderStatus(e.Status).OrDefault().NormalizeForDB()
 	return &infra.LenderPaymentState{
 		ID:                   e.ID,
 		PaymentID:            e.PaymentID,
@@ -225,7 +235,7 @@ func toOrderModel(e *entity.Order) *infra.LenderPaymentState {
 		Lender:               e.Lender,
 		Amount:               e.Amount,
 		Currency:             e.Currency,
-		Status:               string(e.Status),
+		Status:               string(status),
 		Source:               e.Source,
 		ReturnURL:            e.ReturnURL,
 		EMIPlan:              e.EMIPlan,

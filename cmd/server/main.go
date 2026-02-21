@@ -47,6 +47,7 @@ import (
 	profileService "lending-hub-service/internal/domain/profile/service"
 	"lending-hub-service/internal/domain/refund"
 	refundPort "lending-hub-service/internal/domain/refund/port"
+	refundRepoPkg "lending-hub-service/internal/domain/refund/repository"
 
 	// Adapters
 	"lending-hub-service/internal/adapter/contact"
@@ -274,9 +275,10 @@ func main() {
 	// ═══════════════════════════════════════
 	// 8. Domain modules
 	// ═══════════════════════════════════════
-	// Profile module (cache no longer used — persistence to lender_user)
+	// Profile module — profileSyncer is MockClient (TODO: replace with real client when API ready)
 	_ = profileCache
-	profileModule := profile.NewModule(gormDB, profileGateway, profileEventPublisher, contactResolver, profileServiceClient, logger)
+	profileSyncer := userprofile.NewMockClient(logger)
+	profileModule := profile.NewModule(gormDB, profileGateway, profileEventPublisher, contactResolver, profileSyncer, mc, logger)
 	profileUpdater := profileModule.Updater
 
 	// Onboarding module (profileUpdater satisfies port.ProfileUpdater; adapter for ContactResolver)
@@ -289,7 +291,8 @@ func main() {
 		orderMerchantID = cfg.Lazypay.SubMerchantID
 	}
 	orderContactResolver := contact.NewOrderContactAdapter(contactResolver)
-	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen, orderContactResolver, orderMerchantID, cfg.InternalAPIToken, logger)
+	refundRepo := refundRepoPkg.NewRefundRepository(gormDB)
+	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen, orderContactResolver, orderMerchantID, cfg.InternalAPIToken, refundRepo, logger)
 
 	// Refund module
 	orderRepo := orderRepo.NewOrderRepository(gormDB)

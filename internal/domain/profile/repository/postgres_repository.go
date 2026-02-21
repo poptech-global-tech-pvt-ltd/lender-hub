@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"gorm.io/gorm/clause"
 
 	infra "lending-hub-service/internal/infrastructure/postgres"
-	res "lending-hub-service/internal/domain/profile/dto/response"
 	"lending-hub-service/internal/domain/profile/entity"
 	"lending-hub-service/internal/domain/profile/port"
 	lenderPkg "lending-hub-service/pkg/lender"
@@ -25,8 +25,8 @@ func NewProfileRepository(db *gorm.DB) port.ProfileRepository {
 	return &postgresProfileRepository{db: db}
 }
 
-// Get returns a user profile by userId+lender, or nil if not found
-func (r *postgresProfileRepository) Get(ctx context.Context, userID, lender string) (*entity.UserProfile, error) {
+// GetByUserIDAndLender returns a user profile by userId+lender, or nil if not found
+func (r *postgresProfileRepository) GetByUserIDAndLender(ctx context.Context, userID, lender string) (*entity.UserProfile, error) {
 	var model infra.LenderUser
 	err := r.db.WithContext(ctx).
 		Where("user_id = ? AND lender = ?", userID, lender).
@@ -78,84 +78,99 @@ func (r *postgresProfileRepository) Upsert(ctx context.Context, profile *entity.
 }
 
 
-// UpsertFromEligibility updates lender_user from Eligibility API response
-func (r *postgresProfileRepository) UpsertFromEligibility(ctx context.Context, userID, lender string, resp *res.EligibilityResponse) error {
+// UpsertFromEligibility updates lender_user from Eligibility API result
+func (r *postgresProfileRepository) UpsertFromEligibility(ctx context.Context, userID, lender string, result *port.EligibilityResult) error {
 	if lender == "" {
 		lender = lenderPkg.Lazypay.String()
 	}
 	now := time.Now().UTC()
-	status := mapStatusForDB(resp.ReasonCode, resp.TxnEligible)
+	status := mapStatusForDB(result.EligibilityCode, result.TxnEligible)
 
 	updates := map[string]interface{}{
-		"txn_eligible":        resp.TxnEligible,
-		"available_limit":     resp.AvailableLimit,
-		"credit_limit":        resp.AvailableLimit,
-		"existing_user":       resp.ExistingUser,
+		"txn_eligible":        result.TxnEligible,
+		"available_limit":     result.AvailableLimit,
+		"credit_limit":        result.AvailableLimit,
+		"existing_user":       result.ExistingUser,
 		"last_eligibility_at": now,
 		"current_status":      status,
 		"updated_at":          now,
 	}
-	if resp.EligibilityRespID != "" {
-		updates["eligibility_resp_id"] = resp.EligibilityRespID
+	if result.EligibilityResponseID != "" {
+		updates["eligibility_resp_id"] = result.EligibilityResponseID
+	}
+	if len(result.EmiPlans) > 0 {
+		if b, err := json.Marshal(result.EmiPlans); err == nil {
+			updates["credit_line_summary"] = b
+		}
 	}
 
 	return r.upsertLenderUser(ctx, userID, lender, updates)
 }
 
-// UpsertFromCustomerStatus updates lender_user from Customer Status API response
-func (r *postgresProfileRepository) UpsertFromCustomerStatus(ctx context.Context, userID, lender string, resp *res.CustomerStatusResponse) error {
+// UpsertFromCustomerStatus updates lender_user from Customer Status API result
+func (r *postgresProfileRepository) UpsertFromCustomerStatus(ctx context.Context, userID, lender string, result *port.CustomerStatusResult) error {
 	if lender == "" {
 		lender = lenderPkg.Lazypay.String()
 	}
 	now := time.Now().UTC()
-	status := deriveStatusFromCustomerStatus(resp)
+	status := deriveStatusFromCustomerStatus(result)
 
 	updates := map[string]interface{}{
-		"pre_approved":           resp.PreApproved,
-		"onboarding_required":    resp.OnboardingRequired,
-		"customer_info_required": resp.CustomerInfoRequired,
-		"ntb_eligible":           resp.NTBEligible,
-		"available_limit":        resp.AvailableLimit,
-		"credit_limit":           resp.AvailableLimit,
-		"last_status_check_at":   now,
-		"current_status":         status,
-		"updated_at":             now,
+		"pre_approved":         result.PreApproved,
+		"onboarding_required":  result.OnboardingRequired,
+		"ntb_eligible":         result.NTBEligible,
+		"available_limit":      result.AvailableLimit,
+		"credit_limit":         result.AvailableLimit,
+		"last_status_check_at": now,
+		"current_status":       status,
+		"updated_at":           now,
 	}
-	onboardingDone := !resp.OnboardingRequired
+	onboardingDone := !result.OnboardingRequired
 	updates["onboarding_done"] = onboardingDone
-	if resp.NTBEligible != nil {
-		updates["ntb_status"] = *resp.NTBEligible
+	if result.NTBEligible != nil {
+		updates["ntb_status"] = *result.NTBEligible
 	}
 
 	return r.upsertLenderUser(ctx, userID, lender, updates)
 }
 
-// UpsertFromCombined updates lender_user from combined UserProfileResponse
-func (r *postgresProfileRepository) UpsertFromCombined(ctx context.Context, userID, lender string, profile *res.UserProfileResponse) error {
+// UpsertFromCombined updates lender_user from combined CustomerStatus + Eligibility results
+func (r *postgresProfileRepository) UpsertFromCombined(ctx context.Context, userID, lender string, cs *port.CustomerStatusResult, el *port.EligibilityResult) error {
 	if lender == "" {
 		lender = lenderPkg.Lazypay.String()
 	}
 	now := time.Now().UTC()
+	status := deriveStatusFromCombined(cs, el)
 
 	updates := map[string]interface{}{
-		"pre_approved":           profile.PreApproved,
-		"onboarding_required":    profile.OnboardingRequired,
-		"customer_info_required": profile.CustomerInfoRequired,
-		"ntb_eligible":           profile.NTBEligible,
-		"available_limit":        profile.AvailableLimit,
-		"credit_limit":           profile.AvailableLimit,
-		"current_status":         profile.Status,
-		"updated_at":             now,
+		"pre_approved":         cs.PreApproved,
+		"onboarding_required":  cs.OnboardingRequired,
+		"ntb_eligible":         cs.NTBEligible,
+		"available_limit":      cs.AvailableLimit,
+		"credit_limit":         cs.AvailableLimit,
+		"last_status_check_at": now,
+		"current_status":       status,
+		"updated_at":           now,
 	}
-	updates["onboarding_done"] = !profile.OnboardingRequired
-	if profile.NTBEligible != nil {
-		updates["ntb_status"] = *profile.NTBEligible
+	updates["onboarding_done"] = !cs.OnboardingRequired
+	if cs.NTBEligible != nil {
+		updates["ntb_status"] = *cs.NTBEligible
 	}
-	if profile.TxnEligible != nil {
-		updates["txn_eligible"] = *profile.TxnEligible
-	}
-	if profile.ExistingUser != nil {
-		updates["existing_user"] = *profile.ExistingUser
+	if el != nil {
+		updates["txn_eligible"] = el.TxnEligible
+		updates["existing_user"] = el.ExistingUser
+		updates["available_limit"] = el.AvailableLimit
+		updates["credit_limit"] = el.AvailableLimit
+		updates["last_eligibility_at"] = now
+		if el.EligibilityResponseID != "" {
+			updates["eligibility_resp_id"] = el.EligibilityResponseID
+		}
+		if len(el.EmiPlans) > 0 {
+			if b, err := json.Marshal(el.EmiPlans); err == nil {
+				updates["credit_line_summary"] = b
+			}
+		}
+		updates["current_status"] = deriveStatusFromCombined(cs, el)
 	}
 
 	return r.upsertLenderUser(ctx, userID, lender, updates)
@@ -232,12 +247,25 @@ func mapStatusForDB(reasonCode string, txnEligible bool) string {
 	return "ACTIVE"
 }
 
-func deriveStatusFromCustomerStatus(cs *res.CustomerStatusResponse) string {
+func deriveStatusFromCustomerStatus(cs *port.CustomerStatusResult) string {
 	if cs.OnboardingRequired {
-		if cs.NTBEligible != nil && *cs.NTBEligible {
-			return "NOT_STARTED" // NTB
-		}
 		return "NOT_STARTED"
+	}
+	if cs.PreApproved && cs.AvailableLimit > 0 {
+		return "ACTIVE"
+	}
+	return "INELIGIBLE"
+}
+
+func deriveStatusFromCombined(cs *port.CustomerStatusResult, el *port.EligibilityResult) string {
+	if cs.OnboardingRequired {
+		return "NOT_STARTED"
+	}
+	if el != nil {
+		if el.TxnEligible && el.AvailableLimit > 0 {
+			return "ACTIVE"
+		}
+		return "INELIGIBLE"
 	}
 	if cs.PreApproved && cs.AvailableLimit > 0 {
 		return "ACTIVE"

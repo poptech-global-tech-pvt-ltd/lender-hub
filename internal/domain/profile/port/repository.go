@@ -3,27 +3,16 @@ package port
 import (
 	"context"
 
-	res "lending-hub-service/internal/domain/profile/dto/response"
 	"lending-hub-service/internal/domain/profile/entity"
 )
 
 // ProfileRepository abstracts persistence of user profile data
 type ProfileRepository interface {
-	// Get returns a user profile by userId+lender, or nil if not found
-	Get(ctx context.Context, userID, lender string) (*entity.UserProfile, error)
-
-	// GetForUpdate returns a user profile row locked for update (FOR UPDATE)
+	GetByUserIDAndLender(ctx context.Context, userID, lender string) (*entity.UserProfile, error)
 	GetForUpdate(ctx context.Context, userID, lender string) (*entity.UserProfile, error)
-
-	// Upsert creates or updates a profile row
 	Upsert(ctx context.Context, profile *entity.UserProfile) error
 
-	// UpsertFromEligibility updates lender_user from Eligibility API response
-	UpsertFromEligibility(ctx context.Context, userID, lender string, resp *res.EligibilityResponse) error
-
-	// UpsertFromCustomerStatus updates lender_user from Customer Status API response
-	UpsertFromCustomerStatus(ctx context.Context, userID, lender string, resp *res.CustomerStatusResponse) error
-
-	// UpsertFromCombined updates lender_user from combined UserProfileResponse
-	UpsertFromCombined(ctx context.Context, userID, lender string, profile *res.UserProfileResponse) error
+	UpsertFromEligibility(ctx context.Context, userID, lender string, result *EligibilityResult) error
+	UpsertFromCustomerStatus(ctx context.Context, userID, lender string, result *CustomerStatusResult) error
+	UpsertFromCombined(ctx context.Context, userID, lender string, cs *CustomerStatusResult, el *EligibilityResult) error
 }

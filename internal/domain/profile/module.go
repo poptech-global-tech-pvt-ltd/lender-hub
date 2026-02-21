@@ -17,6 +17,8 @@ import (
 type Module struct {
 	Service                service.ProfileService
 	Updater                *service.ProfileUpdater
+	eligibilityHandler     *handler.EligibilityHandler
+	customerStatusHandler  *handler.CustomerStatusHandler
 	combinedProfileHandler *handler.CombinedProfileHandler
 }
 
@@ -25,32 +27,35 @@ func NewModule(
 	db *gorm.DB,
 	gw port.ProfileGateway,
 	publisher port.ProfileEventPublisher,
-	contactResolver *service.UserContactResolver,
-	profileClient *userprofile.Client,
+	contactResolver port.ContactResolver,
+	profileSyncer port.ProfileSyncer,
+	mc interface{},
 	logger *baseLogger.Logger,
 ) *Module {
 	repo := repository.NewProfileRepository(db)
-	svc := service.NewProfileService(gw, contactResolver, repo, profileClient, logger)
+	svc := service.NewProfileService(gw, repo, contactResolver, profileSyncer, mc, logger)
 	updater := service.NewProfileUpdater(repo, publisher)
 
 	return &Module{
 		Service:                svc,
 		Updater:                updater,
+		eligibilityHandler:     handler.NewEligibilityHandler(svc),
+		customerStatusHandler:  handler.NewCustomerStatusHandler(svc),
 		combinedProfileHandler: handler.NewCombinedProfileHandler(svc),
 	}
 }
 
 // NewModuleWithStubs creates a new profile module with stub implementations
-func NewModuleWithStubs(db *gorm.DB, contactResolver *service.UserContactResolver, profileClient *userprofile.Client, logger *baseLogger.Logger) *Module {
+func NewModuleWithStubs(db *gorm.DB, contactResolver port.ContactResolver, logger *baseLogger.Logger) *Module {
 	gw := stub.NewStubProfileGateway()
 	publisher := stub.NewStubProfileEventPublisher()
-	return NewModule(db, gw, publisher, contactResolver, profileClient, logger)
+	profileSyncer := userprofile.NewMockClient(logger)
+	return NewModule(db, gw, publisher, contactResolver, profileSyncer, nil, logger)
 }
 
-// RegisterRoutes registers profile module routes.
-// Single GET profile API: userId (path), source (required query), amount (optional), currency (optional, default INR).
-// - Without amount: returns customer status only (Lazypay Customer Status API).
-// - With amount: returns combined profile (Customer Status + Eligibility / EMI plans).
+// RegisterRoutes registers profile module routes
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
+	rg.POST("/eligibility", m.eligibilityHandler.Handle)
+	rg.POST("/customer-status", m.customerStatusHandler.Handle)
 	rg.GET("/profile/:userId", m.combinedProfileHandler.Handle)
 }
