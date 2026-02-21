@@ -5,6 +5,7 @@ import (
 	lpReq "lending-hub-service/internal/adapter/lazypay/dto/request"
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
 	onbResp "lending-hub-service/internal/domain/onboarding/dto/response"
+	"lending-hub-service/pkg/lender"
 )
 
 // OnboardingMapper maps between canonical and Lazypay onboarding formats
@@ -44,7 +45,7 @@ func FromLPOnboardingResponse(
 	return &onbResp.OnboardingResponse{
 		OnboardingID:    lp.OnboardingID,
 		OnboardingTxnID: onboardingTxnID,
-		Provider:        "LAZYPAY",
+		Provider:        lender.Lazypay.String(),
 		RedirectURL:     lp.RedirectURL,
 		Status:          lp.Status,
 	}

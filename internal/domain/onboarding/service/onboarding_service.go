@@ -9,7 +9,10 @@ import (
 	res "lending-hub-service/internal/domain/onboarding/dto/response"
 	"lending-hub-service/internal/domain/onboarding/entity"
 	"lending-hub-service/internal/domain/onboarding/port"
-	profileService "lending-hub-service/internal/domain/profile/service"
+	"lending-hub-service/pkg/lender"
+	baseLogger "lending-hub-service/pkg/logger"
+
+	"go.uber.org/zap"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 	"lending-hub-service/pkg/idgen"
 )
@@ -19,10 +22,11 @@ type OnboardingService struct {
 	repo            port.OnboardingRepository
 	eventStore      port.OnboardingEventStore
 	gateway         port.OnboardingGateway
-	profileUpdater  *profileService.ProfileUpdater
+	profileUpdater  port.ProfileUpdater
 	processor       *EventProcessor
 	idgen           *idgen.Generator
-	contactResolver *profileService.UserContactResolver
+	contactResolver port.ContactResolver
+	logger          *baseLogger.Logger
 }
 
 // NewOnboardingService creates a new OnboardingService
@@ -30,9 +34,10 @@ func NewOnboardingService(
 	repo port.OnboardingRepository,
 	eventStore port.OnboardingEventStore,
 	gateway port.OnboardingGateway,
-	profileUpdater *profileService.ProfileUpdater,
+	profileUpdater port.ProfileUpdater,
 	idgen *idgen.Generator,
-	contactResolver *profileService.UserContactResolver,
+	contactResolver port.ContactResolver,
+	logger *baseLogger.Logger,
 ) *OnboardingService {
 	return &OnboardingService{
 		repo:            repo,
@@ -42,13 +47,14 @@ func NewOnboardingService(
 		processor:       NewEventProcessor(),
 		idgen:           idgen,
 		contactResolver: contactResolver,
+		logger:          logger,
 	}
 }
 
 // StartOnboarding initiates a new onboarding flow
 func (s *OnboardingService) StartOnboarding(ctx context.Context, req req.StartOnboardingRequest) (*res.OnboardingResponse, error) {
 	// Resolve user contact (mobile + email) from userId
-	contact, err := s.contactResolver.Resolve(ctx, req.UserID)
+	contact, err := s.contactResolver.GetContact(ctx, req.UserID)
 	if err != nil {
 		return nil, sharedErrors.New(sharedErrors.CodeUserContactNotFound, 422, "Unable to resolve user contact details (mobile required)")
 	}
@@ -68,7 +74,7 @@ func (s *OnboardingService) StartOnboarding(ctx context.Context, req req.StartOn
 		ProviderOnboardingID: &gatewayResp.OnboardingID,
 		UserID:               req.UserID,
 		MerchantID:           "",        // Not in request, from config
-		Provider:             "LAZYPAY", // TODO: make configurable
+		Provider:             lender.Lazypay.String(),
 		Mobile:               contact.Mobile,
 		Source:               req.Source,
 		Channel:              nil, // Derive from source if needed
@@ -252,8 +258,12 @@ func (s *OnboardingService) ProcessCallback(ctx context.Context, req req.Onboard
 		// Get credit limit from gateway response or use default
 		creditLimit := 50000.0 // TODO: get from gateway response
 		if err := s.profileUpdater.UpdateOnOnboardingSuccess(ctx, onboarding.UserID, onboarding.Provider, creditLimit); err != nil {
-			// Log error but don't fail callback
-			// In production, you might want to retry this
+			s.logger.Warn("profileUpdater.UpdateOnOnboardingSuccess failed",
+				baseLogger.Module("onboarding"),
+				baseLogger.OnboardingID(onboarding.OnboardingID),
+				baseLogger.UserID(onboarding.UserID),
+				zap.Error(err),
+			)
 		}
 	}
 

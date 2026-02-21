@@ -5,6 +5,7 @@ import (
 	lpReq "lending-hub-service/internal/adapter/lazypay/dto/request"
 	lpResp "lending-hub-service/internal/adapter/lazypay/dto/response"
 	profileResp "lending-hub-service/internal/domain/profile/dto/response"
+	"lending-hub-service/pkg/lender"
 )
 
 // ProfileMapper maps between canonical and Lazypay profile formats
@@ -40,7 +41,7 @@ func FromLPEligibilityResponse(lp *lpResp.LPEligibilityResponse, userID string) 
 	if lp.COF == nil {
 		return &profileResp.EligibilityResponse{
 			UserID:      userID,
-			Provider:    "LAZYPAY",
+			Provider:    lender.Lazypay.String(),
 			TxnEligible: false,
 			ReasonCode:  "COF_NOT_AVAILABLE",
 		}
@@ -49,7 +50,7 @@ func FromLPEligibilityResponse(lp *lpResp.LPEligibilityResponse, userID string) 
 	emiPlans := mapEmiPlans(cof.EmiPlans)
 	return &profileResp.EligibilityResponse{
 		UserID:            userID,
-		Provider:          "LAZYPAY",
+		Provider:          lender.Lazypay.String(),
 		TxnEligible:       cof.TxnEligibility,
 		AvailableLimit:    cof.AvailableLimit,
 		EmiPlans:          emiPlans,
@@ -80,7 +81,7 @@ func mapEmiPlans(lpPlans []lpResp.LPEmiPlan) []profileResp.EmiPlan {
 func FromLPCustomerStatusResponse(lp *lpResp.LPCustomerStatusResponse, userID string) *profileResp.CustomerStatusResponse {
 	return &profileResp.CustomerStatusResponse{
 		UserID:               userID,
-		Provider:             "LAZYPAY",
+		Provider:             lender.Lazypay.String(),
 		PreApproved:          lp.PreApprovalStatus,
 		OnboardingRequired:   lp.OnboardingRequired,
 		CustomerInfoRequired: lp.CustomerInfoRequired,
@@ -97,7 +98,7 @@ func MergeToUserProfile(
 ) *profileResp.UserProfileResponse {
 	resp := &profileResp.UserProfileResponse{
 		UserID:               userID,
-		Provider:             "LAZYPAY",
+		Provider:             lender.Lazypay.String(),
 		PreApproved:          cs.PreApproved,
 		OnboardingRequired:   cs.OnboardingRequired,
 		CustomerInfoRequired: cs.CustomerInfoRequired,

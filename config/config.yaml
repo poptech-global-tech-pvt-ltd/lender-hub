@@ -35,9 +35,30 @@ kafka:
   enabled: false
   brokers:
     - "localhost:9092"
-  profile_topic: "lending-hub.profile.events"
-  order_topic: "lending-hub.order.events"
-  refund_topic: "lending-hub.refund.events"
+  topics:
+    orderCreated: "lsp.order.created"
+    orderStatusUpdated: "lsp.order.status_updated"
+    orderSupportUpdated: "lsp.order.support_updated"
+    refundCreated: "lsp.refund.created"
+    refundStatusUpdated: "lsp.refund.status_updated"
+    orderCallback: "lsp.lazypay.order.callback"
+    refundCallback: "lsp.lazypay.refund.callback"
+    orderCallbackDlq: "lsp.lazypay.order.callback.dlq"
+    refundCallbackDlq: "lsp.lazypay.refund.callback.dlq"
+  consumerGroups:
+    orderCallback: "lending-hub.order-callback"
+    refundCallback: "lending-hub.refund-callback"
+  producer:
+    writeTimeoutSeconds: 10
+    batchSize: 1
+    requiredAcks: -1
+  consumer:
+    minBytes: 1
+    maxBytes: 10485760
+    maxWaitSeconds: 3
+    commitIntervalMs: 1000
+    maxRetries: 3
+    retryBackoffMs: 500
 
 userProfileService:
   baseURL: "https://userprofile-sit.popclub.co.in"
@@ -53,6 +74,6 @@ lazypay:
   profile_timeout: 10s
   payment_timeout: 5s
   enabled: true
-  
+
 
 

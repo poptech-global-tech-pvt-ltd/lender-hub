@@ -9,9 +9,12 @@ import (
 	res "lending-hub-service/internal/domain/order/dto/response"
 	"lending-hub-service/internal/domain/order/entity"
 	"lending-hub-service/internal/domain/order/port"
-	profileService "lending-hub-service/internal/domain/profile/service"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 	"lending-hub-service/pkg/idgen"
+	"lending-hub-service/pkg/lender"
+	baseLogger "lending-hub-service/pkg/logger"
+
+	"go.uber.org/zap"
 )
 
 // OrderService handles order operations
@@ -20,11 +23,12 @@ type OrderService struct {
 	mappingRepo     port.PaymentMappingRepository
 	idempotency     *IdempotencyService
 	gateway         port.OrderGateway
-	profileUpdater  *profileService.ProfileUpdater
+	profileUpdater  port.ProfileUpdater
 	publisher       port.OrderEventPublisher
 	idgen           *idgen.Generator
-	contactResolver *profileService.UserContactResolver
+	contactResolver port.ContactResolver
 	merchantID      string // from config (subMerchantId), for DB NOT NULL
+	logger          *baseLogger.Logger
 }
 
 // NewOrderService creates a new OrderService
@@ -33,11 +37,12 @@ func NewOrderService(
 	mappingRepo port.PaymentMappingRepository,
 	idempotency *IdempotencyService,
 	gateway port.OrderGateway,
-	profileUpdater *profileService.ProfileUpdater,
+	profileUpdater port.ProfileUpdater,
 	publisher port.OrderEventPublisher,
 	idgen *idgen.Generator,
-	contactResolver *profileService.UserContactResolver,
+	contactResolver port.ContactResolver,
 	merchantID string,
+	logger *baseLogger.Logger,
 ) *OrderService {
 	if merchantID == "" {
 		merchantID = "DEFAULT"
@@ -52,6 +57,7 @@ func NewOrderService(
 		idgen:           idgen,
 		contactResolver: contactResolver,
 		merchantID:      merchantID,
+		logger:          logger,
 	}
 }
 
@@ -180,7 +186,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		PaymentID:           paymentID,
 		UserID:              req.UserID,
 		MerchantID:          merchantID,
-		Lender:              "LAZYPAY",
+		Lender:              lender.Lazypay.String(),
 		Amount:              req.Amount,
 		Currency:            req.Currency,
 		Status:              orderStatus,
@@ -201,7 +207,9 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	}
 
 	if gatewayResp.Status == "SUCCESS" || gatewayResp.Status == "PENDING" {
-		_, _ = s.contactResolver.RefreshFromSource(ctx, req.UserID, "ORDER")
+		if _, err := s.contactResolver.RefreshFromSource(ctx, req.UserID, "ORDER"); err != nil {
+			s.logger.Warn("RefreshFromSource failed", baseLogger.Module("order"), baseLogger.PaymentID(paymentID), baseLogger.UserID(req.UserID), zap.Error(err))
+		}
 	}
 
 	mapping := &entity.PaymentMapping{
@@ -213,7 +221,9 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		CreatedAt:           time.Now().UTC(),
 		UpdatedAt:           time.Now().UTC(),
 	}
-	_ = s.mappingRepo.Create(ctx, mapping)
+	if err := s.mappingRepo.Create(ctx, mapping); err != nil {
+		s.logger.Warn("mappingRepo.Create failed — state may be stale", baseLogger.Module("order"), baseLogger.PaymentID(paymentID), baseLogger.UserID(req.UserID), zap.Error(err))
+	}
 
 	// Build response: loanId, paymentId, lenderOrderId, status, redirectUrl
 	response := &res.OrderResponse{
@@ -229,20 +239,16 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		ErrorMessage:  gatewayResp.ErrorMessage,
 	}
 
-	responseBytes, _ := json.Marshal(response)
-	_ = s.idempotency.Complete(ctx, idempotencyKey, responseBytes, lenderOrderIDPtr)
-
-	s.publisher.Publish(ctx, &port.OrderEvent{
-		Type:          port.EventOrderCreated,
-		PaymentID:     paymentID,
-		UserID:        req.UserID,
-		MerchantID:    merchantID,
-		Lender:        order.Lender,
-		Amount:        req.Amount,
-		Currency:      req.Currency,
-		Status:        "PENDING",
-		LenderOrderID: lenderOrderIDPtr,
-	})
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		s.logger.Warn("json.Marshal failed", baseLogger.Module("order"), baseLogger.PaymentID(paymentID), zap.Error(err))
+	}
+	if err := s.idempotency.Complete(ctx, idempotencyKey, responseBytes, lenderOrderIDPtr); err != nil {
+		s.logger.Warn("idempotency.Complete failed", baseLogger.Module("order"), baseLogger.PaymentID(paymentID), zap.Error(err))
+	}
+	if err := s.publisher.PublishOrderCreated(ctx, order); err != nil {
+		s.logger.Warn("failed to publish OrderCreated event", baseLogger.Module("order"), baseLogger.PaymentID(paymentID), zap.Error(err))
+	}
 
 	return response, nil
 }
@@ -295,6 +301,7 @@ func (s *OrderService) resolveOrderFromEnquiry(ctx context.Context, order *entit
 	if err != nil {
 		return err
 	}
+	oldStatus := order.Status
 	// Update order from enquiry (COMPLETE → SUCCESS for DB enum)
 	newStatus := entity.OrderStatus(gatewayResp.Status).OrDefault().NormalizeForDB()
 	order.Status = newStatus
@@ -303,7 +310,13 @@ func (s *OrderService) resolveOrderFromEnquiry(ctx context.Context, order *entit
 	}
 	order.LenderLastStatus = &gatewayResp.Status
 	order.UpdatedAt = time.Now().UTC()
-	return s.orderRepo.Update(ctx, order)
+	if err := s.orderRepo.Update(ctx, order); err != nil {
+		return err
+	}
+	if err := s.publisher.PublishOrderStatusUpdated(ctx, order, oldStatus, "enquiry"); err != nil {
+		s.logger.Warn("failed to publish OrderStatusUpdated after enquiry", baseLogger.Module("order"), baseLogger.PaymentID(order.PaymentID), zap.Error(err))
+	}
+	return nil
 }
 
 // GetOrderStatusByLenderOrderID retrieves order by Lazypay's orderId (recon, no enquiry)
@@ -365,19 +378,19 @@ func (s *OrderService) orderToStatusResponse(order *entity.Order) *res.OrderStat
 		}
 	}
 	return &res.OrderStatusResponse{
-		LoanID:           loanID,
-		PaymentID:        order.PaymentID,
-		Status:           string(order.Status.OrDefault()),
-		LenderOrderID:    lenderOrderID,
-		Amount:           order.Amount,
-		Currency:         order.Currency,
-		EmiPlan:          emi,
-		LenderLastStatus: lenderLastStatus,
+		LoanID:            loanID,
+		PaymentID:         order.PaymentID,
+		Status:            string(order.Status.OrDefault()),
+		LenderOrderID:     lenderOrderID,
+		Amount:            order.Amount,
+		Currency:          order.Currency,
+		EmiPlan:           emi,
+		LenderLastStatus:  lenderLastStatus,
 		LenderLastMessage: lenderLastMsg,
-		LastErrorCode:    lastErrCode,
-		LastErrorMessage: lastErrMsg,
-		CreatedAt:        order.CreatedAt,
-		UpdatedAt:        order.UpdatedAt,
+		LastErrorCode:     lastErrCode,
+		LastErrorMessage:  lastErrMsg,
+		CreatedAt:         order.CreatedAt,
+		UpdatedAt:         order.UpdatedAt,
 	}
 }
 
@@ -454,13 +467,21 @@ func (s *OrderService) supportUpdateStatusWithOrder(ctx context.Context, getOrde
 		return nil, sharedErrors.New(sharedErrors.CodeInvalidTransition, 422,
 			"cannot move "+string(order.Status)+" → "+string(target)+" via support override")
 	}
+	oldStatus := order.Status
 	reason := updateReq.Reason
+	actor := updateReq.Actor
+	if actor == "" {
+		actor = "support"
+	}
 	order.Status = target
 	order.LastErrorMessage = &reason
 	order.LenderLastStatus = ptr("SUPPORT_OVERRIDE")
 	order.UpdatedAt = time.Now().UTC()
 	if err := s.orderRepo.Update(ctx, order); err != nil {
 		return nil, err
+	}
+	if err := s.publisher.PublishOrderSupportUpdated(ctx, order, oldStatus, reason, actor); err != nil {
+		s.logger.Warn("failed to publish OrderSupportUpdated", baseLogger.Module("order"), baseLogger.PaymentID(order.PaymentID), zap.Error(err))
 	}
 	return order, nil
 }
@@ -489,6 +510,7 @@ func (s *OrderService) ProcessCallback(ctx context.Context, req req.OrderCallbac
 		return nil
 	}
 
+	oldStatus := order.Status
 	// Update order status
 	newStatus := entity.OrderStatus(req.Status)
 	order.Status = newStatus
@@ -513,7 +535,7 @@ func (s *OrderService) ProcessCallback(ctx context.Context, req req.OrderCallbac
 		// For now, we'll just update the limit (in production, you'd check first)
 		newAvailable := 0.0 // TODO: calculate from current available - amount
 		if err := s.profileUpdater.UpdateLimit(ctx, order.UserID, order.Lender, newAvailable); err != nil {
-			// Log error but don't fail callback
+			s.logger.Warn("profileUpdater.UpdateLimit failed in callback", baseLogger.Module("order"), baseLogger.PaymentID(order.PaymentID), baseLogger.UserID(order.UserID), zap.Error(err))
 		}
 	}
 
@@ -522,26 +544,9 @@ func (s *OrderService) ProcessCallback(ctx context.Context, req req.OrderCallbac
 		return err
 	}
 
-	// Publish event
-	eventType := port.EventOrderCompleted
-	if newStatus == entity.OrderFailed {
-		eventType = port.EventOrderFailed
+	if err := s.publisher.PublishOrderStatusUpdated(ctx, order, oldStatus, "callback"); err != nil {
+		s.logger.Warn("failed to publish OrderStatusUpdated in callback", baseLogger.Module("order"), baseLogger.PaymentID(order.PaymentID), zap.Error(err))
 	}
-
-	s.publisher.Publish(ctx, &port.OrderEvent{
-		Type:          eventType,
-		PaymentID:     order.PaymentID,
-		UserID:        order.UserID,
-		MerchantID:    order.MerchantID,
-		Lender:        order.Lender,
-		Amount:        order.Amount,
-		Currency:      order.Currency,
-		Status:        req.Status,
-		LenderOrderID: order.LenderOrderID,
-		LenderTxnID:   req.LenderTxnID,
-		ErrorCode:     req.ErrorCode,
-		ErrorMessage:  req.ErrorMessage,
-	})
 
 	return nil
 }

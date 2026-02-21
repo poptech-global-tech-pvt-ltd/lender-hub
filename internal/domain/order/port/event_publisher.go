@@ -1,34 +1,14 @@
 package port
 
-import "context"
+import (
+	"context"
 
-// OrderEventType represents types of order events
-type OrderEventType string
-
-const (
-	EventOrderCreated  OrderEventType = "OrderCreated"
-	EventOrderCompleted OrderEventType = "OrderCompleted"
-	EventOrderFailed    OrderEventType = "OrderFailed"
-	EventOrderRefunded  OrderEventType = "OrderRefunded"
+	"lending-hub-service/internal/domain/order/entity"
 )
 
-// OrderEvent represents an order domain event
-type OrderEvent struct {
-	Type            OrderEventType
-	PaymentID       string
-	UserID          string
-	MerchantID      string
-	Lender          string
-	Amount          float64
-	Currency        string
-	Status          string
-	LenderOrderID   *string
-	LenderTxnID     *string
-	ErrorCode       *string
-	ErrorMessage    *string
-}
-
-// OrderEventPublisher publishes order change events (Kafka in prod, noop stub now)
+// OrderEventPublisher publishes order change events to Kafka
 type OrderEventPublisher interface {
-	Publish(ctx context.Context, event *OrderEvent) error
+	PublishOrderCreated(ctx context.Context, order *entity.Order) error
+	PublishOrderStatusUpdated(ctx context.Context, order *entity.Order, oldStatus entity.OrderStatus, trigger string) error
+	PublishOrderSupportUpdated(ctx context.Context, order *entity.Order, oldStatus entity.OrderStatus, reason, actor string) error
 }

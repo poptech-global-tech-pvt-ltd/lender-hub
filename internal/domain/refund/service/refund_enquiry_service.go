@@ -109,7 +109,9 @@ func (s *RefundEnquiryService) ResolveRefundState(ctx context.Context, refund *e
 	if refund.Status.IsTerminal() {
 		ttl = 5 * time.Minute
 	}
-	_ = s.cache.Set(ctx, refund.RefundID, refund.Status, ttl)
+	if err := s.cache.Set(ctx, refund.RefundID, refund.Status, ttl); err != nil {
+		s.logger.Warn("cache.Set failed after ResolveRefundState", baseLogger.RefundID(refund.RefundID), baseLogger.Module("refund"))
+	}
 
 	s.logger.Info("refund state resolved via enquiry",
 		baseLogger.RefundID(refund.RefundID),

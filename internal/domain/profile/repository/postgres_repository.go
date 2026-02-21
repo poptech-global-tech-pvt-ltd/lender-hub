@@ -12,6 +12,7 @@ import (
 	res "lending-hub-service/internal/domain/profile/dto/response"
 	"lending-hub-service/internal/domain/profile/entity"
 	"lending-hub-service/internal/domain/profile/port"
+	lenderPkg "lending-hub-service/pkg/lender"
 )
 
 // postgresProfileRepository implements ProfileRepository using GORM
@@ -76,12 +77,11 @@ func (r *postgresProfileRepository) Upsert(ctx context.Context, profile *entity.
 		Create(&model).Error
 }
 
-const defaultLender = "LAZYPAY"
 
 // UpsertFromEligibility updates lender_user from Eligibility API response
 func (r *postgresProfileRepository) UpsertFromEligibility(ctx context.Context, userID, lender string, resp *res.EligibilityResponse) error {
 	if lender == "" {
-		lender = defaultLender
+		lender = lenderPkg.Lazypay.String()
 	}
 	now := time.Now().UTC()
 	status := mapStatusForDB(resp.ReasonCode, resp.TxnEligible)
@@ -105,7 +105,7 @@ func (r *postgresProfileRepository) UpsertFromEligibility(ctx context.Context, u
 // UpsertFromCustomerStatus updates lender_user from Customer Status API response
 func (r *postgresProfileRepository) UpsertFromCustomerStatus(ctx context.Context, userID, lender string, resp *res.CustomerStatusResponse) error {
 	if lender == "" {
-		lender = defaultLender
+		lender = lenderPkg.Lazypay.String()
 	}
 	now := time.Now().UTC()
 	status := deriveStatusFromCustomerStatus(resp)
@@ -133,7 +133,7 @@ func (r *postgresProfileRepository) UpsertFromCustomerStatus(ctx context.Context
 // UpsertFromCombined updates lender_user from combined UserProfileResponse
 func (r *postgresProfileRepository) UpsertFromCombined(ctx context.Context, userID, lender string, profile *res.UserProfileResponse) error {
 	if lender == "" {
-		lender = defaultLender
+		lender = lenderPkg.Lazypay.String()
 	}
 	now := time.Now().UTC()
 

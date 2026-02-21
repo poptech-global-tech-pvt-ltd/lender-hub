@@ -10,6 +10,7 @@ import (
 	"lending-hub-service/internal/domain/profile/port"
 	"lending-hub-service/internal/infrastructure/userprofile"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	"lending-hub-service/pkg/lender"
 	baseLogger "lending-hub-service/pkg/logger"
 
 	"go.uber.org/zap"
@@ -60,8 +61,8 @@ func (s *profileService) CheckEligibility(ctx context.Context, req req.Eligibili
 	}
 	resp.UserID = req.UserID
 
-	lender := "LAZYPAY"
-	if persistErr := s.repo.UpsertFromEligibility(ctx, req.UserID, lender, resp); persistErr != nil {
+	l := lender.Lazypay.String()
+	if persistErr := s.repo.UpsertFromEligibility(ctx, req.UserID, l, resp); persistErr != nil {
 		s.logger.Warn("failed to persist eligibility", baseLogger.Module("profile"), zap.String("userId", req.UserID), zap.Error(persistErr))
 	}
 
@@ -83,8 +84,8 @@ func (s *profileService) GetCustomerStatus(ctx context.Context, req req.Customer
 	}
 	resp.UserID = req.UserID
 
-	lender := "LAZYPAY"
-	if persistErr := s.repo.UpsertFromCustomerStatus(ctx, req.UserID, lender, resp); persistErr != nil {
+	l := lender.Lazypay.String()
+	if persistErr := s.repo.UpsertFromCustomerStatus(ctx, req.UserID, l, resp); persistErr != nil {
 		s.logger.Warn("failed to persist customer status", baseLogger.Module("profile"), zap.String("userId", req.UserID), zap.Error(persistErr))
 	}
 
@@ -132,8 +133,8 @@ func (s *profileService) GetCombinedProfile(ctx context.Context, userID string, 
 
 	combined := mergeToUserProfile(csResp, eligResp, userID)
 
-	lender := "LAZYPAY"
-	if persistErr := s.repo.UpsertFromCombined(ctx, userID, lender, combined); persistErr != nil {
+	l := lender.Lazypay.String()
+	if persistErr := s.repo.UpsertFromCombined(ctx, userID, l, combined); persistErr != nil {
 		s.logger.Warn("failed to persist combined profile", baseLogger.Module("profile"), zap.String("userId", userID), zap.Error(persistErr))
 	}
 
@@ -143,12 +144,17 @@ func (s *profileService) GetCombinedProfile(ctx context.Context, userID string, 
 }
 
 func (s *profileService) syncUpstream(ctx context.Context, userID string, limit float64, preApproved, onboardingDone bool, status string) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("panic in syncUpstream recovered", baseLogger.Module("profile"), zap.String("userId", userID))
+		}
+	}()
 	if s.profileClient == nil {
 		return
 	}
 	if err := s.profileClient.UpdateLenderProfile(ctx, userprofile.LenderProfileUpdateRequest{
 		UserID:         userID,
-		Lender:         "LAZYPAY",
+		Lender:         lender.Lazypay.String(),
 		AvailableLimit: limit,
 		PreApproved:    preApproved,
 		OnboardingDone: onboardingDone,
@@ -161,7 +167,7 @@ func (s *profileService) syncUpstream(ctx context.Context, userID string, limit 
 func mergeToUserProfile(cs *res.CustomerStatusResponse, elig *res.EligibilityResponse, userID string) *res.UserProfileResponse {
 	resp := &res.UserProfileResponse{
 		UserID:               userID,
-		Provider:             "LAZYPAY",
+		Provider:             lender.Lazypay.String(),
 		PreApproved:          cs.PreApproved,
 		OnboardingRequired:   cs.OnboardingRequired,
 		CustomerInfoRequired: cs.CustomerInfoRequired,

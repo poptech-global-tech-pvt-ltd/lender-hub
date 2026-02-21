@@ -7,18 +7,19 @@ import (
 	"gorm.io/gorm"
 
 	orderPort "lending-hub-service/internal/domain/order/port"
+	"lending-hub-service/internal/domain/refund/stub"
 	"lending-hub-service/internal/domain/refund/handler"
 	refundPort "lending-hub-service/internal/domain/refund/port"
 	"lending-hub-service/internal/domain/refund/repository"
 	"lending-hub-service/internal/domain/refund/service"
 	"lending-hub-service/internal/infrastructure/observability/metrics"
-	profileService "lending-hub-service/internal/domain/profile/service"
 	baseLogger "lending-hub-service/pkg/logger"
 	"lending-hub-service/pkg/idgen"
 )
 
 // Module wires together all refund module components
 type Module struct {
+	Service              *service.RefundService
 	createHandler        *handler.CreateRefundHandler
 	getHandler           *handler.GetRefundHandler
 	getByRefundIDHandler *handler.GetRefundByRefundIDHandler
@@ -33,7 +34,8 @@ func NewModule(
 	orderGateway orderPort.OrderGateway,
 	gateway refundPort.RefundGateway,
 	cache refundPort.RefundCache,
-	profileUpdater *profileService.ProfileUpdater,
+	profileUpdater refundPort.ProfileUpdater,
+	publisher refundPort.RefundEventPublisher,
 	mc metrics.MetricsClient,
 	logger *baseLogger.Logger,
 	idgen *idgen.Generator,
@@ -41,15 +43,21 @@ func NewModule(
 ) *Module {
 	repo := repository.NewRefundRepository(db)
 	enquirySvc := service.NewRefundEnquiryService(gateway, repo, cache, mc, logger, enquirySLA)
-	refundSvc := service.NewRefundService(repo, orderRepo, orderGateway, gateway, cache, enquirySvc, profileUpdater, mc, logger, idgen)
+	refundSvc := service.NewRefundService(repo, orderRepo, orderGateway, gateway, cache, enquirySvc, profileUpdater, publisher, mc, logger, idgen)
 
 	return &Module{
+		Service:              refundSvc,
 		createHandler:        handler.NewCreateRefundHandler(refundSvc),
 		getHandler:           handler.NewGetRefundHandler(refundSvc),
 		getByRefundIDHandler: handler.NewGetRefundByRefundIDHandler(refundSvc),
 		listForOrderHandler:  handler.NewListRefundsForOrderHandler(refundSvc),
 		listByUserHandler:    handler.NewListRefundsByUserHandler(refundSvc),
 	}
+}
+
+// NewStubRefundEventPublisher returns a no-op event publisher for use when Kafka is disabled
+func NewStubRefundEventPublisher() refundPort.RefundEventPublisher {
+	return stub.NewStubRefundEventPublisher()
 }
 
 // RegisterRoutes registers refund routes (static segments before parameterised)

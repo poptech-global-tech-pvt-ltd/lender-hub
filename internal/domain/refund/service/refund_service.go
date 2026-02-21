@@ -6,7 +6,6 @@ import (
 
 	orderEntity "lending-hub-service/internal/domain/order/entity"
 	orderPort "lending-hub-service/internal/domain/order/port"
-	profileService "lending-hub-service/internal/domain/profile/service"
 	req "lending-hub-service/internal/domain/refund/dto/request"
 	res "lending-hub-service/internal/domain/refund/dto/response"
 	"lending-hub-service/internal/domain/refund/entity"
@@ -14,10 +13,9 @@ import (
 	"lending-hub-service/internal/infrastructure/observability/metrics"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 	"lending-hub-service/pkg/idgen"
+	"lending-hub-service/pkg/lender"
 	baseLogger "lending-hub-service/pkg/logger"
 )
-
-const lenderLAZYPAY = "LAZYPAY"
 
 // RefundService handles refund operations
 type RefundService struct {
@@ -27,7 +25,8 @@ type RefundService struct {
 	gateway        port.RefundGateway
 	cache          port.RefundCache
 	enquiryService *RefundEnquiryService
-	profileUpdater *profileService.ProfileUpdater
+	profileUpdater port.ProfileUpdater
+	publisher      port.RefundEventPublisher
 	mc             metrics.MetricsClient
 	logger         *baseLogger.Logger
 	idgen          *idgen.Generator
@@ -41,7 +40,8 @@ func NewRefundService(
 	gateway port.RefundGateway,
 	cache port.RefundCache,
 	enquiryService *RefundEnquiryService,
-	profileUpdater *profileService.ProfileUpdater,
+	profileUpdater port.ProfileUpdater,
+	publisher port.RefundEventPublisher,
 	mc metrics.MetricsClient,
 	logger *baseLogger.Logger,
 	idgen *idgen.Generator,
@@ -54,6 +54,7 @@ func NewRefundService(
 		cache:          cache,
 		enquiryService: enquiryService,
 		profileUpdater: profileUpdater,
+		publisher:      publisher,
 		mc:             mc,
 		logger:         logger,
 		idgen:          idgen,
@@ -87,13 +88,21 @@ func (s *RefundService) CreateRefund(ctx context.Context, r req.CreateRefundRequ
 		return nil, sharedErrors.New(sharedErrors.CodeOrderNotFound, 404, "order loanId not found")
 	}
 
-	existing, _ := s.repo.GetByPaymentRefundID(ctx, lenderLAZYPAY, r.PaymentRefundID)
+	existing, getErr := s.repo.GetByPaymentRefundID(ctx, lender.Lazypay.String(), r.PaymentRefundID)
+	if getErr != nil {
+		s.logger.Warn("repo.GetByPaymentRefundID failed in CreateRefund", baseLogger.Module("refund"))
+	}
 	if existing != nil {
 		if existing.Status.IsTerminal() {
 			return MapRefundToResponse(existing), nil
 		}
-		_ = s.enquiryService.ResolveRefundState(ctx, existing)
-		reloaded, _ := s.repo.GetByPaymentRefundID(ctx, lenderLAZYPAY, r.PaymentRefundID)
+		if err := s.enquiryService.ResolveRefundState(ctx, existing); err != nil {
+			s.logger.Warn("ResolveRefundState failed", baseLogger.RefundID(existing.RefundID), baseLogger.Module("refund"))
+		}
+		reloaded, reloadErr := s.repo.GetByPaymentRefundID(ctx, lender.Lazypay.String(), r.PaymentRefundID)
+		if reloadErr != nil {
+			s.logger.Warn("repo.GetByPaymentRefundID failed after ResolveRefundState", baseLogger.RefundID(existing.RefundID), baseLogger.Module("refund"))
+		}
 		if reloaded != nil {
 			return MapRefundToResponse(reloaded), nil
 		}
@@ -141,22 +150,33 @@ func (s *RefundService) CreateRefund(ctx context.Context, r req.CreateRefundRequ
 			lenderStatus, lenderMsg = de.Code, de.Message
 		}
 		refund.MarkFailed(lenderStatus, lenderMsg)
-		_ = s.repo.Update(ctx, refund)
+		if updErr := s.repo.Update(ctx, refund); updErr != nil {
+			s.logger.Warn("repo.Update failed after gateway error", baseLogger.RefundID(refund.RefundID), baseLogger.Module("refund"))
+		}
 		return nil, err
 	}
 
 	if resp.IsTimeout {
 		refund.MarkUnknown("Refund initiation timed out")
-		_ = s.repo.Update(ctx, refund)
-		_ = s.cache.Set(ctx, refundID, entity.RefundStatusUnknown, 30*time.Second)
+		if err := s.repo.Update(ctx, refund); err != nil {
+			s.logger.Warn("repo.Update failed after timeout", baseLogger.RefundID(refundID), baseLogger.Module("refund"))
+		}
+		if err := s.cache.Set(ctx, refundID, entity.RefundStatusUnknown, 30*time.Second); err != nil {
+			s.logger.Warn("cache.Set failed after timeout", baseLogger.RefundID(refundID), baseLogger.Module("refund"))
+		}
 		return MapRefundToResponse(refund), nil
 	}
 
 	if resp.ErrorCode == "LPDUPLICATEREFUND" {
 		s.logger.Info("LPDUPLICATEREFUND received, triggering enquiry",
 			baseLogger.RefundID(refundID))
-		_ = s.enquiryService.ResolveRefundState(ctx, refund)
-		reloaded, _ := s.repo.GetByRefundID(ctx, refundID)
+		if err := s.enquiryService.ResolveRefundState(ctx, refund); err != nil {
+			s.logger.Warn("ResolveRefundState failed for LPDUPLICATEREFUND", baseLogger.RefundID(refundID), baseLogger.Module("refund"))
+		}
+		reloaded, reloadErr := s.repo.GetByRefundID(ctx, refundID)
+		if reloadErr != nil {
+			s.logger.Warn("repo.GetByRefundID failed after LPDUPLICATEREFUND enquiry", baseLogger.RefundID(refundID), baseLogger.Module("refund"))
+		}
 		if reloaded != nil {
 			return MapRefundToResponse(reloaded), nil
 		}
@@ -166,17 +186,36 @@ func (s *RefundService) CreateRefund(ctx context.Context, r req.CreateRefundRequ
 	if resp.Status == "REFUND_SUCCESS" {
 		refund.MarkSuccess(resp.LpTxnID, resp.ParentTxnID, resp.RespMessage)
 		s.mc.Count(metrics.MetricRefundCompleted, 1, []string{"provider:" + order.Lender, "trigger:direct"})
-		go s.profileUpdater.AddToLimit(context.Background(), order.UserID, order.Lender, r.Amount)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("panic in async AddToLimit recovered",
+						baseLogger.RefundID(refundID),
+						baseLogger.Module("refund"),
+					)
+				}
+			}()
+			// Use Background: request context is cancelled when handler returns
+			s.profileUpdater.AddToLimit(context.Background(), order.UserID, order.Lender, r.Amount)
+		}()
 	} else {
 		refund.MarkFailed(resp.Status, resp.RespMessage)
 	}
 
-	_ = s.repo.Update(ctx, refund)
+	if err := s.repo.Update(ctx, refund); err != nil {
+		s.logger.Warn("repo.Update failed after CreateRefund", baseLogger.RefundID(refundID), baseLogger.Module("refund"))
+	}
 	ttl := 30 * time.Second
 	if refund.Status.IsTerminal() {
 		ttl = 5 * time.Minute
 	}
-	_ = s.cache.Set(ctx, refundID, refund.Status, ttl)
+	if err := s.cache.Set(ctx, refundID, refund.Status, ttl); err != nil {
+		s.logger.Warn("cache.Set failed after CreateRefund", baseLogger.RefundID(refundID), baseLogger.Module("refund"))
+	}
+
+	if err := s.publisher.PublishRefundCreated(ctx, refund); err != nil {
+		s.logger.Warn("failed to publish RefundCreated event", baseLogger.RefundID(refundID), baseLogger.Module("refund"))
+	}
 
 	s.logger.Info("refund created",
 		baseLogger.RefundID(refundID),
@@ -214,17 +253,20 @@ func (s *RefundService) resolveOrderFromEnquiry(ctx context.Context, order *orde
 
 // GetByPaymentRefundID retrieves by POP's paymentRefundId, triggers enquiry if non-terminal
 func (s *RefundService) GetByPaymentRefundID(ctx context.Context, paymentRefundID string) (*entity.Refund, error) {
-	refund, err := s.repo.GetByPaymentRefundID(ctx, lenderLAZYPAY, paymentRefundID)
+	refund, err := s.repo.GetByPaymentRefundID(ctx, lender.Lazypay.String(), paymentRefundID)
 	if err != nil || refund == nil {
 		return nil, sharedErrors.New(sharedErrors.CodeRefundNotFound, 404, "refund not found")
 	}
 	refund.Status = refund.Status.OrDefault()
 	if refund.Status.IsResolvable() {
-		_ = s.enquiryService.ResolveRefundState(ctx, refund)
-		refund, _ = s.repo.GetByPaymentRefundID(ctx, lenderLAZYPAY, paymentRefundID)
-		if refund != nil {
-			refund.Status = refund.Status.OrDefault()
+		if err := s.enquiryService.ResolveRefundState(ctx, refund); err != nil {
+			s.logger.Warn("ResolveRefundState failed in GetByPaymentRefundID", baseLogger.RefundID(refund.RefundID), baseLogger.Module("refund"))
 		}
+		refreshed, err := s.repo.GetByPaymentRefundID(ctx, lender.Lazypay.String(), paymentRefundID)
+		if err == nil && refreshed != nil {
+			refund = refreshed
+		}
+		refund.Status = refund.Status.OrDefault()
 	}
 	return refund, nil
 }
@@ -237,11 +279,14 @@ func (s *RefundService) GetByRefundID(ctx context.Context, refundID string) (*en
 	}
 	refund.Status = refund.Status.OrDefault()
 	if refund.Status.IsResolvable() {
-		_ = s.enquiryService.ResolveRefundState(ctx, refund)
-		refund, _ = s.repo.GetByRefundID(ctx, refundID)
-		if refund != nil {
-			refund.Status = refund.Status.OrDefault()
+		if err := s.enquiryService.ResolveRefundState(ctx, refund); err != nil {
+			s.logger.Warn("ResolveRefundState failed in GetByRefundID", baseLogger.RefundID(refundID), baseLogger.Module("refund"))
 		}
+		refreshed, err := s.repo.GetByRefundID(ctx, refundID)
+		if err == nil && refreshed != nil {
+			refund = refreshed
+		}
+		refund.Status = refund.Status.OrDefault()
 	}
 	return refund, nil
 }
@@ -261,6 +306,46 @@ func (s *RefundService) ListByPaymentID(ctx context.Context, paymentID string) (
 // ListByUserID lists refunds for a user
 func (s *RefundService) ListByUserID(ctx context.Context, userID string, page, perPage int) ([]*entity.Refund, int, error) {
 	return s.repo.ListByUserID(ctx, userID, page, perPage)
+}
+
+// ProcessRefundCallback processes a refund callback from Kafka (Ingestion Service)
+func (s *RefundService) ProcessRefundCallback(ctx context.Context, callbackReq req.RefundCallbackRequest) error {
+	var refund *entity.Refund
+	var err error
+	if callbackReq.PaymentRefundID != "" {
+		refund, err = s.repo.GetForUpdateByPaymentRefundID(ctx, lender.Lazypay.String(), callbackReq.PaymentRefundID)
+	} else if callbackReq.RefundID != "" {
+		refund, err = s.repo.GetForUpdateByRefundID(ctx, callbackReq.RefundID)
+	} else {
+		return sharedErrors.New(sharedErrors.CodeInvalidRequest, 400, "paymentRefundId or refundId required")
+	}
+	if err != nil {
+		return err
+	}
+	if refund == nil {
+		return sharedErrors.New(sharedErrors.CodeRefundNotFound, 404, "refund not found")
+	}
+	if refund.Status.IsTerminal() {
+		return nil // idempotent
+	}
+	oldStatus := refund.Status
+	switch callbackReq.LenderTxnStatus {
+	case "REFUND_SUCCESS", "SUCCESS":
+		refund.MarkSuccess(callbackReq.LenderTxnID, "", callbackReq.LenderTxnMessage)
+	case "FAILED", "REFUND_FAILED":
+		refund.MarkFailed(callbackReq.LenderStatus, callbackReq.LenderTxnMessage)
+	case "PROCESSING", "PENDING":
+		refund.MarkProcessing(callbackReq.LenderTxnMessage)
+	default:
+		refund.MarkUnknown(callbackReq.LenderTxnMessage)
+	}
+	if err := s.repo.Update(ctx, refund); err != nil {
+		return err
+	}
+	if err := s.publisher.PublishRefundStatusUpdated(ctx, refund, oldStatus, "callback"); err != nil {
+		s.logger.Warn("failed to publish RefundStatusUpdated in callback", baseLogger.RefundID(refund.RefundID), baseLogger.Module("refund"))
+	}
+	return nil
 }
 
 // MapRefundToResponse maps entity to response DTO

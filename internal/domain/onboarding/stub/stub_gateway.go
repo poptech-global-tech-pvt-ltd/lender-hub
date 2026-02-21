@@ -6,6 +6,7 @@ import (
 
 	res "lending-hub-service/internal/domain/onboarding/dto/response"
 	"lending-hub-service/internal/domain/onboarding/port"
+	"lending-hub-service/pkg/lender"
 )
 
 // StubOnboardingGateway implements port.OnboardingGateway for local development
@@ -27,7 +28,7 @@ func (g *StubOnboardingGateway) StartOnboarding(ctx context.Context, mobile, ema
 	return &res.OnboardingResponse{
 		OnboardingID:    providerOnboardingID,
 		OnboardingTxnID: "", // Set by service layer
-		Provider:        "LAZYPAY",
+		Provider:        lender.Lazypay.String(),
 		RedirectURL:     redirectURL,
 		Status:          "PENDING",
 	}, nil
@@ -38,7 +39,7 @@ func (g *StubOnboardingGateway) GetOnboardingStatus(ctx context.Context, onboard
 	return &res.OnboardingStatusResponse{
 		OnboardingID: "stub-onboarding-id",
 		UserID:       "stub-user",
-		Provider:     "LAZYPAY",
+		Provider:     lender.Lazypay.String(),
 		Status:       "PENDING",
 		COFEligible:  false,
 		RetryCount:   0,

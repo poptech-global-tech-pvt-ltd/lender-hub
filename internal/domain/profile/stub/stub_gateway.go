@@ -5,6 +5,7 @@ import (
 
 	res "lending-hub-service/internal/domain/profile/dto/response"
 	"lending-hub-service/internal/domain/profile/port"
+	"lending-hub-service/pkg/lender"
 )
 
 // StubProfileGateway implements port.ProfileGateway for local development
@@ -19,7 +20,7 @@ func NewStubProfileGateway() port.ProfileGateway {
 func (g *StubProfileGateway) CheckEligibility(ctx context.Context, mobile, email string, amount float64) (*res.EligibilityResponse, error) {
 	return &res.EligibilityResponse{
 		UserID:         "stub-user",
-		Provider:       "LAZYPAY",
+		Provider:       lender.Lazypay.String(),
 		TxnEligible:    true,
 		AvailableLimit: 50000.0,
 		ExistingUser:   true,
@@ -34,7 +35,7 @@ func (g *StubProfileGateway) CheckEligibility(ctx context.Context, mobile, email
 func (g *StubProfileGateway) GetCustomerStatus(ctx context.Context, mobile, email string) (*res.CustomerStatusResponse, error) {
 	return &res.CustomerStatusResponse{
 		UserID:               "stub-user",
-		Provider:             "LAZYPAY",
+		Provider:             lender.Lazypay.String(),
 		PreApproved:          true,
 		OnboardingRequired:   false,
 		CustomerInfoRequired: false,

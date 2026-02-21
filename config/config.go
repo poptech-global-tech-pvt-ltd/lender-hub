@@ -73,11 +73,52 @@ type UserProfileServiceConfig struct {
 
 // KafkaConfig defines Kafka event streaming settings
 type KafkaConfig struct {
-	Brokers      []string `mapstructure:"brokers"`
-	Enabled      bool     `mapstructure:"enabled"`
-	ProfileTopic string   `mapstructure:"profile_topic"`
-	OrderTopic   string   `mapstructure:"order_topic"`
-	RefundTopic  string   `mapstructure:"refund_topic"`
+	Brokers        []string            `mapstructure:"brokers"`
+	Enabled        bool                `mapstructure:"enabled"`
+	Topics         KafkaTopics         `mapstructure:"topics"`
+	ConsumerGroups KafkaConsumerGroups `mapstructure:"consumerGroups"`
+	Producer       KafkaProducerConfig `mapstructure:"producer"`
+	Consumer       KafkaConsumerConfig `mapstructure:"consumer"`
+	// Legacy topics (fallback when Topics not set)
+	ProfileTopic string `mapstructure:"profile_topic"`
+	OrderTopic   string `mapstructure:"order_topic"`
+	RefundTopic  string `mapstructure:"refund_topic"`
+}
+
+// KafkaTopics holds all topic names (never hardcode — use config)
+type KafkaTopics struct {
+	OrderCreated        string `mapstructure:"orderCreated"`
+	OrderStatusUpdated  string `mapstructure:"orderStatusUpdated"`
+	OrderSupportUpdated string `mapstructure:"orderSupportUpdated"`
+	RefundCreated       string `mapstructure:"refundCreated"`
+	RefundStatusUpdated string `mapstructure:"refundStatusUpdated"`
+	OrderCallback       string `mapstructure:"orderCallback"`
+	RefundCallback      string `mapstructure:"refundCallback"`
+	OrderCallbackDLQ    string `mapstructure:"orderCallbackDlq"`
+	RefundCallbackDLQ   string `mapstructure:"refundCallbackDlq"`
+}
+
+// KafkaConsumerGroups holds consumer group IDs
+type KafkaConsumerGroups struct {
+	OrderCallback  string `mapstructure:"orderCallback"`
+	RefundCallback string `mapstructure:"refundCallback"`
+}
+
+// KafkaProducerConfig holds producer settings
+type KafkaProducerConfig struct {
+	WriteTimeoutSeconds int `mapstructure:"writeTimeoutSeconds"`
+	BatchSize           int `mapstructure:"batchSize"`
+	RequiredAcks        int `mapstructure:"requiredAcks"`
+}
+
+// KafkaConsumerConfig holds consumer settings
+type KafkaConsumerConfig struct {
+	MinBytes         int `mapstructure:"minBytes"`
+	MaxBytes         int `mapstructure:"maxBytes"`
+	MaxWaitSeconds   int `mapstructure:"maxWaitSeconds"`
+	CommitIntervalMs int `mapstructure:"commitIntervalMs"`
+	MaxRetries       int `mapstructure:"maxRetries"`
+	RetryBackoffMs   int `mapstructure:"retryBackoffMs"`
 }
 
 // Load reads configuration from file and environment variables
@@ -116,6 +157,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
+	// Ensure Kafka topics have defaults when empty
+	ensureKafkaTopicsDefaults(&cfg)
+
 	// Validate required fields
 	if err := validate(&cfg); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
@@ -149,6 +193,27 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("redis.write_timeout", "3s")
 
 	v.SetDefault("kafka.enabled", false)
+	v.SetDefault("kafka.topics.orderCreated", "lsp.order.created")
+	v.SetDefault("kafka.topics.orderStatusUpdated", "lsp.order.status_updated")
+	v.SetDefault("kafka.topics.orderSupportUpdated", "lsp.order.support_updated")
+	v.SetDefault("kafka.topics.refundCreated", "lsp.refund.created")
+	v.SetDefault("kafka.topics.refundStatusUpdated", "lsp.refund.status_updated")
+	v.SetDefault("kafka.topics.orderCallback", "lsp.lazypay.order.callback")
+	v.SetDefault("kafka.topics.refundCallback", "lsp.lazypay.refund.callback")
+	v.SetDefault("kafka.topics.orderCallbackDlq", "lsp.lazypay.order.callback.dlq")
+	v.SetDefault("kafka.topics.refundCallbackDlq", "lsp.lazypay.refund.callback.dlq")
+	v.SetDefault("kafka.consumerGroups.orderCallback", "lending-hub.order-callback")
+	v.SetDefault("kafka.consumerGroups.refundCallback", "lending-hub.refund-callback")
+	v.SetDefault("kafka.producer.writeTimeoutSeconds", 10)
+	v.SetDefault("kafka.producer.batchSize", 1)
+	v.SetDefault("kafka.producer.requiredAcks", -1)
+	v.SetDefault("kafka.consumer.minBytes", 1)
+	v.SetDefault("kafka.consumer.maxBytes", 10485760)
+	v.SetDefault("kafka.consumer.maxWaitSeconds", 3)
+	v.SetDefault("kafka.consumer.commitIntervalMs", 1000)
+	v.SetDefault("kafka.consumer.maxRetries", 3)
+	v.SetDefault("kafka.consumer.retryBackoffMs", 500)
+	// Legacy fallbacks
 	v.SetDefault("kafka.profile_topic", "lending-hub.profile.events")
 	v.SetDefault("kafka.order_topic", "lending-hub.order.events")
 	v.SetDefault("kafka.refund_topic", "lending-hub.refund.events")
@@ -156,6 +221,44 @@ func setDefaults(v *viper.Viper) {
 	// User Profile Service defaults
 	v.SetDefault("userProfileService.baseURL", "https://userprofile-sit.popclub.co.in")
 	v.SetDefault("userProfileService.timeout", "5s")
+}
+
+func ensureKafkaTopicsDefaults(cfg *Config) {
+	t := &cfg.Kafka.Topics
+	if t.OrderCreated == "" {
+		t.OrderCreated = "lsp.order.created"
+	}
+	if t.OrderStatusUpdated == "" {
+		t.OrderStatusUpdated = "lsp.order.status_updated"
+	}
+	if t.OrderSupportUpdated == "" {
+		t.OrderSupportUpdated = "lsp.order.support_updated"
+	}
+	if t.RefundCreated == "" {
+		t.RefundCreated = "lsp.refund.created"
+	}
+	if t.RefundStatusUpdated == "" {
+		t.RefundStatusUpdated = "lsp.refund.status_updated"
+	}
+	if t.OrderCallback == "" {
+		t.OrderCallback = "lsp.lazypay.order.callback"
+	}
+	if t.RefundCallback == "" {
+		t.RefundCallback = "lsp.lazypay.refund.callback"
+	}
+	if t.OrderCallbackDLQ == "" {
+		t.OrderCallbackDLQ = "lsp.lazypay.order.callback.dlq"
+	}
+	if t.RefundCallbackDLQ == "" {
+		t.RefundCallbackDLQ = "lsp.lazypay.refund.callback.dlq"
+	}
+	g := &cfg.Kafka.ConsumerGroups
+	if g.OrderCallback == "" {
+		g.OrderCallback = "lending-hub.order-callback"
+	}
+	if g.RefundCallback == "" {
+		g.RefundCallback = "lending-hub.refund-callback"
+	}
 }
 
 func validate(cfg *Config) error {

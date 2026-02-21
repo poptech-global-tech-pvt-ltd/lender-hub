@@ -16,6 +16,7 @@ import (
 	"lending-hub-service/internal/infrastructure/http/executor"
 	sharedContext "lending-hub-service/internal/shared/context"
 	sharedErrors "lending-hub-service/internal/shared/errors"
+	"lending-hub-service/pkg/lender"
 	baseLogger "lending-hub-service/pkg/logger"
 )
 
@@ -102,7 +103,7 @@ func (c *OnboardingClient) StartOnboarding(ctx context.Context, mobile, email st
 	return &onbResp.OnboardingResponse{
 		OnboardingID:    lpResp.OnboardingID,
 		OnboardingTxnID: "", // Set by service layer
-		Provider:        "LAZYPAY",
+		Provider:        lender.Lazypay.String(),
 		RedirectURL:     lpResp.RedirectURL,
 		Status:          lpResp.Status,
 	}, nil
@@ -158,7 +159,7 @@ func (c *OnboardingClient) GetOnboardingStatus(ctx context.Context, onboardingID
 	return &onbResp.OnboardingStatusResponse{
 		OnboardingID: "", // Not in LP response
 		UserID:       "", // Not in LP response
-		Provider:     "LAZYPAY",
+		Provider:     lender.Lazypay.String(),
 		Status:       lpResp.Status,
 		COFEligible:  lpResp.COFEligible,
 		LastStep:     nil, // Not in LP response

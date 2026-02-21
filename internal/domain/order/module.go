@@ -9,7 +9,6 @@ import (
 	"lending-hub-service/internal/domain/order/repository"
 	"lending-hub-service/internal/domain/order/service"
 	"lending-hub-service/internal/domain/order/stub"
-	profileService "lending-hub-service/internal/domain/profile/service"
 	"lending-hub-service/pkg/idgen"
 	baseLogger "lending-hub-service/pkg/logger"
 )
@@ -25,10 +24,10 @@ type Module struct {
 func NewModule(
 	db *gorm.DB,
 	gw port.OrderGateway,
-	profileUpdater *profileService.ProfileUpdater,
+	profileUpdater port.ProfileUpdater,
 	publisher port.OrderEventPublisher,
 	idgen *idgen.Generator,
-	contactResolver *profileService.UserContactResolver,
+	contactResolver port.ContactResolver,
 	merchantID string,
 	internalAPIToken string,
 	logger *baseLogger.Logger,
@@ -37,7 +36,7 @@ func NewModule(
 	mappingRepo := repository.NewPaymentMappingRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	idempotencySvc := service.NewIdempotencyService(idempotencyRepo)
-	svc := service.NewOrderService(orderRepo, mappingRepo, idempotencySvc, gw, profileUpdater, publisher, idgen, contactResolver, merchantID)
+	svc := service.NewOrderService(orderRepo, mappingRepo, idempotencySvc, gw, profileUpdater, publisher, idgen, contactResolver, merchantID, logger)
 	return &Module{
 		Service:          svc,
 		internalAPIToken: internalAPIToken,
@@ -45,8 +44,13 @@ func NewModule(
 	}
 }
 
+// NewStubOrderEventPublisher returns a no-op event publisher for use when Kafka is disabled
+func NewStubOrderEventPublisher() port.OrderEventPublisher {
+	return stub.NewStubOrderEventPublisher()
+}
+
 // NewModuleWithStubs creates a new order module with stub implementations
-func NewModuleWithStubs(db *gorm.DB, profileUpdater *profileService.ProfileUpdater, idgen *idgen.Generator, contactResolver *profileService.UserContactResolver, merchantID, internalAPIToken string, logger *baseLogger.Logger) *Module {
+func NewModuleWithStubs(db *gorm.DB, profileUpdater port.ProfileUpdater, idgen *idgen.Generator, contactResolver port.ContactResolver, merchantID, internalAPIToken string, logger *baseLogger.Logger) *Module {
 	gw := stub.NewStubOrderGateway()
 	publisher := stub.NewStubOrderEventPublisher()
 	return NewModule(db, gw, profileUpdater, publisher, idgen, contactResolver, merchantID, internalAPIToken, logger)

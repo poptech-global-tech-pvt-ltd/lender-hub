@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	// Infrastructure - Phase 4A
 	"lending-hub-service/internal/infrastructure/cache"
 	"lending-hub-service/internal/infrastructure/kafka"
+	kafkaConsumer "lending-hub-service/internal/infrastructure/kafka/consumer"
 
 	// Infrastructure - Phase 4B (logging + business metrics)
 	"lending-hub-service/internal/infrastructure/observability/metrics"
@@ -47,6 +49,7 @@ import (
 	refundPort "lending-hub-service/internal/domain/refund/port"
 
 	// Adapters
+	"lending-hub-service/internal/adapter/contact"
 	"lending-hub-service/internal/adapter/lazypay"
 	lpConfig "lending-hub-service/internal/adapter/lazypay/config"
 )
@@ -175,7 +178,7 @@ func main() {
 	}
 
 	// ═══════════════════════════════════════
-	// 6. Initialize Kafka producer (Phase 4A)
+	// 6. Initialize Kafka (producers + event publishers)
 	// ═══════════════════════════════════════
 	var producer kafka.EventPublisher
 	if len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Enabled {
@@ -203,9 +206,25 @@ func main() {
 	}
 	defer producer.Close()
 
-	// Create event publishers for modules
 	profileEventPublisher := kafka.NewProfileEventPublisher(producer)
-	orderEventPublisher := kafka.NewOrderEventPublisher(producer)
+
+	var orderEventPublisher orderPort.OrderEventPublisher
+	var refundEventPublisher refundPort.RefundEventPublisher
+	var orderKafkaPublisher *kafka.OrderEventPublisher
+	var refundKafkaPublisher *kafka.RefundEventPublisher
+	if len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Enabled {
+		orderKafkaPublisher = kafka.NewOrderEventPublisher(cfg, logger)
+		refundKafkaPublisher = kafka.NewRefundEventPublisher(cfg, logger)
+		orderEventPublisher = orderKafkaPublisher
+		refundEventPublisher = refundKafkaPublisher
+		defer func() {
+			_ = orderKafkaPublisher.Close()
+			_ = refundKafkaPublisher.Close()
+		}()
+	} else {
+		orderEventPublisher = order.NewStubOrderEventPublisher()
+		refundEventPublisher = refund.NewStubRefundEventPublisher()
+	}
 
 	// ═══════════════════════════════════════
 	// 6.5. User Contact Resolver
@@ -260,15 +279,17 @@ func main() {
 	profileModule := profile.NewModule(gormDB, profileGateway, profileEventPublisher, contactResolver, profileServiceClient, logger)
 	profileUpdater := profileModule.Updater
 
-	// Onboarding module
-	onboardingModule := onboarding.NewModule(gormDB, onboardingGateway, profileUpdater, idGen, contactResolver)
+	// Onboarding module (profileUpdater satisfies port.ProfileUpdater; adapter for ContactResolver)
+	onboardingContactResolver := contact.NewOnboardingContactAdapter(contactResolver)
+	onboardingModule := onboarding.NewModule(gormDB, onboardingGateway, profileUpdater, idGen, onboardingContactResolver, logger)
 
 	// Order module (merchantID for lender_payment_state.merchant_id NOT NULL)
 	orderMerchantID := cfg.Lazypay.MerchantID
 	if orderMerchantID == "" {
 		orderMerchantID = cfg.Lazypay.SubMerchantID
 	}
-	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen, contactResolver, orderMerchantID, cfg.InternalAPIToken, logger)
+	orderContactResolver := contact.NewOrderContactAdapter(contactResolver)
+	orderModule := order.NewModule(gormDB, orderGateway, profileUpdater, orderEventPublisher, idGen, orderContactResolver, orderMerchantID, cfg.InternalAPIToken, logger)
 
 	// Refund module
 	orderRepo := orderRepo.NewOrderRepository(gormDB)
@@ -279,8 +300,61 @@ func main() {
 	}
 	refundModule := refund.NewModule(
 		gormDB, orderRepo, orderGateway, refundGateway, refundCache, profileUpdater,
-		mc, logger, idGen, refundEnquirySLA,
+		refundEventPublisher, mc, logger, idGen, refundEnquirySLA,
 	)
+
+	// ═══════════════════════════════════════
+	// 8.5. Kafka consumers (when enabled)
+	// ═══════════════════════════════════════
+	var orderReader, refundReader *kafka.TopicReader
+	var orderDLQWriter, refundDLQWriter *kafka.TopicWriter
+	var consumerWg sync.WaitGroup
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Enabled {
+		topics := cfg.Kafka.Topics
+		groups := cfg.Kafka.ConsumerGroups
+		consCfg := cfg.Kafka.Consumer
+		prodCfg := cfg.Kafka.Producer
+
+		orderReader = kafka.NewTopicReader(cfg.Kafka.Brokers, topics.OrderCallback, groups.OrderCallback, consCfg, logger)
+		refundReader = kafka.NewTopicReader(cfg.Kafka.Brokers, topics.RefundCallback, groups.RefundCallback, consCfg, logger)
+		orderDLQWriter = kafka.NewTopicWriter(cfg.Kafka.Brokers, topics.OrderCallbackDLQ, prodCfg, logger)
+		refundDLQWriter = kafka.NewTopicWriter(cfg.Kafka.Brokers, topics.RefundCallbackDLQ, prodCfg, logger)
+
+		orderConsumer := kafkaConsumer.NewOrderCallbackConsumer(
+			orderModule.Service, orderDLQWriter, mc, logger, consCfg.MaxRetries)
+		refundConsumer := kafkaConsumer.NewRefundCallbackConsumer(
+			refundModule.Service, refundDLQWriter, mc, logger, consCfg.MaxRetries)
+
+		consumerWg.Add(1)
+		go func() {
+			defer consumerWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("panic in order callback consumer")
+				}
+			}()
+			if err := orderReader.Consume(ctx, orderConsumer.Handle); err != nil && ctx.Err() == nil {
+				logger.Error("order callback consumer stopped", baseLogger.ErrorCode(err.Error()))
+			}
+		}()
+
+		consumerWg.Add(1)
+		go func() {
+			defer consumerWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("panic in refund callback consumer")
+				}
+			}()
+			if err := refundReader.Consume(ctx, refundConsumer.Handle); err != nil && ctx.Err() == nil {
+				logger.Error("refund callback consumer stopped", baseLogger.ErrorCode(err.Error()))
+			}
+		}()
+		logger.Info("Kafka consumers started")
+	}
 
 	// ═══════════════════════════════════════
 	// 9. Setup Gin router + middleware
@@ -340,18 +414,32 @@ func main() {
 		}
 	}()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-ctx.Done()
+	logger.Info("shutdown signal received")
 
-	logger.Info("shutting down server...")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
-	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("HTTP shutdown error", baseLogger.ErrorCode(err.Error()))
+	}
+	logger.Info("HTTP server stopped")
 
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Fatal("server forced shutdown", baseLogger.ErrorCode(err.Error()))
+	if orderReader != nil {
+		orderReader.Close()
+	}
+	if refundReader != nil {
+		refundReader.Close()
+	}
+	consumerWg.Wait()
+	logger.Info("Kafka consumers drained")
+
+	if orderDLQWriter != nil {
+		orderDLQWriter.Close()
+	}
+	if refundDLQWriter != nil {
+		refundDLQWriter.Close()
 	}
 
-	logger.Info("server stopped")
+	logger.Info("shutdown complete")
 }
