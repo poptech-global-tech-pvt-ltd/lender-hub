@@ -9,7 +9,6 @@ import (
 	req "lending-hub-service/internal/domain/profile/dto/request"
 	res "lending-hub-service/internal/domain/profile/dto/response"
 	"lending-hub-service/internal/domain/profile/port"
-	"lending-hub-service/internal/infrastructure/userprofile"
 	sharedErrors "lending-hub-service/internal/shared/errors"
 	"lending-hub-service/pkg/lender"
 	baseLogger "lending-hub-service/pkg/logger"
@@ -66,26 +65,8 @@ func (s *profileService) CheckEligibility(ctx context.Context, req req.Eligibili
 
 	l := lender.Lazypay.String()
 	if persistErr := s.repo.UpsertFromEligibility(ctx, req.UserID, l, result); persistErr != nil {
-		s.logger.Warn("UpsertFromEligibility failed",
-			baseLogger.Module("profile"), zap.String("userId", req.UserID), zap.Error(persistErr))
+		s.logger.Warn("UpsertFromEligibility failed", baseLogger.Module("profile"), zap.String("userId", req.UserID), zap.Error(persistErr))
 	}
-
-	// Async upstream sync — fire-and-forget
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				s.logger.Error("panic in upstream sync", baseLogger.Module("profile"), zap.Any("panic", r))
-			}
-		}()
-		_ = s.profileSyncer.UpdateLenderProfile(context.Background(), userprofile.LenderProfileUpdateRequest{
-			UserID:         req.UserID,
-			Lender:         l,
-			AvailableLimit: result.AvailableLimit,
-			PreApproved:    false,
-			OnboardingDone: false,
-			CurrentStatus:  deriveStatusFromEligibility(result),
-		})
-	}()
 
 	return mapEligibilityResultToResponse(req.UserID, result), nil
 }
@@ -107,22 +88,6 @@ func (s *profileService) GetCustomerStatus(ctx context.Context, req req.Customer
 		s.logger.Warn("UpsertFromCustomerStatus failed",
 			baseLogger.Module("profile"), zap.String("userId", req.UserID), zap.Error(persistErr))
 	}
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				s.logger.Error("panic in upstream sync", baseLogger.Module("profile"), zap.Any("panic", r))
-			}
-		}()
-		_ = s.profileSyncer.UpdateLenderProfile(context.Background(), userprofile.LenderProfileUpdateRequest{
-			UserID:         req.UserID,
-			Lender:         l,
-			AvailableLimit: result.AvailableLimit,
-			PreApproved:    result.PreApproved,
-			OnboardingDone: !result.OnboardingRequired,
-			CurrentStatus:  deriveStatusFromCustomerStatus(result),
-		})
-	}()
 
 	return mapCustomerStatusResultToResponse(req.UserID, result), nil
 }
@@ -166,26 +131,6 @@ func (s *profileService) GetCombinedProfile(ctx context.Context, userID string, 
 		s.logger.Warn("UpsertFromCombined failed",
 			baseLogger.Module("profile"), zap.String("userId", userID), zap.Error(persistErr))
 	}
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				s.logger.Error("panic in upstream sync", baseLogger.Module("profile"), zap.Any("panic", r))
-			}
-		}()
-		limit := csResult.AvailableLimit
-		if elResult != nil && elResult.AvailableLimit > 0 {
-			limit = elResult.AvailableLimit
-		}
-		_ = s.profileSyncer.UpdateLenderProfile(context.Background(), userprofile.LenderProfileUpdateRequest{
-			UserID:         userID,
-			Lender:         l,
-			AvailableLimit: limit,
-			PreApproved:    csResult.PreApproved,
-			OnboardingDone: !csResult.OnboardingRequired,
-			CurrentStatus:  deriveStatusFromCombined(csResult, elResult),
-		})
-	}()
 
 	return mapCombinedToUserProfileResponse(userID, csResult, elResult), nil
 }

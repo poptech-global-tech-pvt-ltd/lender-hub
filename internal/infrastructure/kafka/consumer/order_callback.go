@@ -99,11 +99,9 @@ func (c *OrderCallbackConsumer) mapEventToRequest(e *events.OrderCallbackEvent) 
 		PaymentID:     e.PaymentID,
 		Provider:      lender.Lazypay.String(),
 		Status:        status,
+		LenderOrderID: e.LenderOrderID,
 		EventTime:     e.EventTime.Format(time.RFC3339),
 		ErrorMessage:  ptrOrNil(e.LenderTxnMessage),
-	}
-	if e.LenderOrderID != "" {
-		req.LenderOrderID = &e.LenderOrderID
 	}
 	if e.LenderTxnID != "" {
 		req.LenderTxnID = &e.LenderTxnID

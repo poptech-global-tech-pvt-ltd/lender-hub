@@ -27,7 +27,7 @@ type OrderService struct {
 	publisher       port.OrderEventPublisher
 	idgen           *idgen.Generator
 	contactResolver port.ContactResolver
-	merchantID      string // from config (subMerchantId), for DB NOT NULL
+	merchantID      string // injected from config at wiring (MerchantID or SubMerchantID), for DB NOT NULL
 	logger          *baseLogger.Logger
 }
 
@@ -69,23 +69,10 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 	// loanId = our ID (lps_xxx) = merchantTxnId to Lazypay
 	loanID := s.idgen.PaymentID()
 
-	// MerchantID and Source: use request or defaults
-	merchantID := req.MerchantID
-	if merchantID == "" {
-		merchantID = s.merchantID
-	}
+	merchantID := s.merchantID
 	source := req.Source
 	if source == "" {
 		source = "CHECKOUT"
-	}
-
-	// EMI tenure: EMIPlan.Tenure or legacy EmiSelection.Tenure
-	tenure := req.EMIPlan.Tenure
-	if tenure == 0 && req.EmiSelection != nil {
-		tenure = req.EmiSelection.Tenure
-	}
-	if tenure == 0 {
-		return nil, sharedErrors.New(sharedErrors.CodeInvalidRequest, 400, "emiPlan.tenure or emiSelection.tenure required")
 	}
 
 	// Idempotency key = POP's paymentId
@@ -122,42 +109,17 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		return nil, sharedErrors.New(sharedErrors.CodeUserContactNotFound, 422, "Unable to resolve user contact details (mobile required)")
 	}
 
-	// loanId = merchantTxnId to Lazypay (no separate txn id)
 	merchantTxnID := loanID
 
-	// Build EMI plans (single plan from tenure)
-	emiType := "PAY_IN_PARTS"
-	if req.EmiSelection != nil {
-		emiType = req.EmiSelection.Type
-	}
-	emiPlans := []port.LPEmiPlan{
-		{
-			Tenure:                   tenure,
-			Type:                     emiType,
-			Emi:                      0,
-			TotalPayableAmount:       0,
-			InterestRate:             0,
-			Principal:                0,
-			TotalInterestAmount:      0,
-			TotalProcessingFee:       0,
-			ProcessingFeeGst:         0,
-			FirstEmiDueDate:          "",
-			SubventionTag:            nil,
-			DiscountedInterestAmount: 0,
-			Schedule:                 nil,
-		},
-	}
-
-	returnURL := req.ReturnURL
-
-	// Call gateway to create order
+	// Call gateway to create order (Lazypay: merchantTxnId, amount, userDetails, source, returnUrl)
 	gatewayResp, err := s.gateway.CreateOrder(ctx, port.OrderInput{
 		MerchantTxnID: merchantTxnID,
 		Mobile:        contact.Mobile,
 		Email:         contact.Email,
 		Amount:        req.Amount,
 		Currency:      req.Currency,
-		EmiPlans:      emiPlans,
+		Source:        source,
+		ReturnURL:     req.ReturnURL,
 	})
 	if err != nil {
 		s.idempotency.Fail(ctx, idempotencyKey)
@@ -181,7 +143,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		lenderOrderIDPtr = &s
 	}
 
-	emiPlanBytes, _ := json.Marshal(map[string]interface{}{"tenure": tenure, "type": emiType})
+	returnURL := req.ReturnURL
 	order := &entity.Order{
 		PaymentID:           paymentID,
 		UserID:              req.UserID,
@@ -192,7 +154,6 @@ func (s *OrderService) CreateOrder(ctx context.Context, req req.CreateOrderReque
 		Status:              orderStatus,
 		Source:              &source,
 		ReturnURL:           &returnURL,
-		EMIPlan:             emiPlanBytes,
 		LenderOrderID:       lenderOrderIDPtr,
 		LenderMerchantTxnID: &merchantTxnID,
 		LastErrorCode:       gatewayResp.ErrorCode,
@@ -538,6 +499,9 @@ func ptr(s string) *string { return &s }
 
 // ProcessCallback processes an order callback event (from Kafka consumer)
 func (s *OrderService) ProcessCallback(ctx context.Context, req req.OrderCallbackRequest) error {
+	if req.LenderOrderID == "" {
+		return sharedErrors.New(sharedErrors.CodeInvalidRequest, 400, "lenderOrderId is required")
+	}
 	// Parse event time
 	eventTime, err := time.Parse(time.RFC3339, req.EventTime)
 	if err != nil {
@@ -569,19 +533,19 @@ func (s *OrderService) ProcessCallback(ctx context.Context, req req.OrderCallbac
 	order.LenderLastTxnTime = &eventTime
 	order.LastErrorCode = req.ErrorCode
 	order.LastErrorMessage = req.ErrorMessage
-	order.UpdatedAt = time.Now().UTC()
+	order.UpdatedAt = time.Now().UTC() //TODO create a time utils and this can be a helper function
 
-	// Update lender order ID if provided
-	if req.LenderOrderID != nil {
-		order.LenderOrderID = req.LenderOrderID
-	}
+	// LenderOrderID is required in callback contract
+	order.LenderOrderID = &req.LenderOrderID
 
 	// If SUCCESS, update profile limit (deduct available limit)
 	if newStatus == entity.OrderSuccess || newStatus == entity.OrderComplete {
 		// Deduct amount from available limit
 		// Get current profile to check available limit
-		// For now, we'll just update the limit (in production, you'd check first)
+		// TODO  For now, we'll just update the limit (in production, you'd check first)
+
 		newAvailable := 0.0 // TODO: calculate from current available - amount
+
 		if err := s.profileUpdater.UpdateLimit(ctx, order.UserID, order.Lender, newAvailable); err != nil {
 			s.logger.Warn("profileUpdater.UpdateLimit failed in callback", baseLogger.Module("order"), baseLogger.PaymentID(order.PaymentID), baseLogger.UserID(order.UserID), zap.Error(err))
 		}

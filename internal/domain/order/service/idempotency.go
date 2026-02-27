@@ -79,28 +79,20 @@ func (s *IdempotencyService) Fail(ctx context.Context, paymentID string) error {
 
 // ComputeHash computes SHA256 hash of the request for idempotency conflict detection
 func (s *IdempotencyService) ComputeHash(req req.CreateOrderRequest) string {
-	tenure := req.EMIPlan.Tenure
-	if tenure == 0 && req.EmiSelection != nil {
-		tenure = req.EmiSelection.Tenure
-	}
 	canonical := struct {
-		PaymentID  string  `json:"paymentId"`
-		UserID     string  `json:"userId"`
-		MerchantID string  `json:"merchantId"`
-		Amount     float64 `json:"amount"`
-		Currency   string  `json:"currency"`
-		Source     string  `json:"source"`
-		ReturnURL  string  `json:"returnUrl"`
-		Tenure     int     `json:"tenure"`
+		PaymentID string  `json:"paymentId"`
+		UserID    string  `json:"userId"`
+		Amount    float64 `json:"amount"`
+		Currency  string  `json:"currency"`
+		Source    string  `json:"source"`
+		ReturnURL string  `json:"returnUrl"`
 	}{
-		PaymentID:  req.PaymentID,
-		UserID:     req.UserID,
-		MerchantID: req.MerchantID,
-		Amount:     req.Amount,
-		Currency:   req.Currency,
-		Source:     req.Source,
-		ReturnURL:  req.ReturnURL,
-		Tenure:     tenure,
+		PaymentID: req.PaymentID,
+		UserID:    req.UserID,
+		Amount:    req.Amount,
+		Currency:  req.Currency,
+		Source:    req.Source,
+		ReturnURL: req.ReturnURL,
 	}
 	jsonBytes, err := json.Marshal(canonical)
 	if err != nil {

@@ -52,41 +52,24 @@ func (c *PaymentClient) CreateOrder(ctx context.Context, input orderPort.OrderIn
 	// Extract RequestContext
 	rc := sharedContext.FromContext(ctx)
 
-	// Map EMI plans from OrderInput to LP format
-	lpEmiPlans := make([]lpReq.LPEmiPlan, len(input.EmiPlans))
-	for i, plan := range input.EmiPlans {
-		lpEmiPlans[i] = lpReq.LPEmiPlan{
-			InterestRate:             plan.InterestRate,
-			Tenure:                   plan.Tenure,
-			Emi:                      plan.Emi,
-			TotalInterestAmount:      plan.TotalInterestAmount,
-			Principal:                plan.Principal,
-			TotalProcessingFee:       plan.TotalProcessingFee,
-			ProcessingFeeGst:         plan.ProcessingFeeGst,
-			TotalPayableAmount:       plan.TotalPayableAmount,
-			FirstEmiDueDate:          plan.FirstEmiDueDate,
-			SubventionTag:            plan.SubventionTag,
-			DiscountedInterestAmount: plan.DiscountedInterestAmount,
-			Schedule:                 plan.Schedule,
-			Type:                     plan.Type,
-		}
+	source := input.Source
+	if source == "" {
+		source = "website"
 	}
 
-	// Map to LP request (Postman contract: merchantTxnId, amount, userDetails, source, returnUrl, emiPlans)
-	lpReq := &lpReq.LPCreateOrderRequest{
+	// Map to LP request (merchantTxnId, amount, userDetails, source, returnUrl)
+	lpReqBody := &lpReq.LPCreateOrderRequest{
 		MerchantTxnID: input.MerchantTxnID,
 		Amount: lpCommon.LPAmount{
 			Value:    lpCommon.FormatAmount(input.Amount),
 			Currency: input.Currency,
 		},
 		UserDetails: lpCommon.NewLPUserDetails(input.Mobile, input.Email),
-		Source:      "website",
-		ReturnURL:   c.config.ReturnURL, // From config
-		EmiPlans:    lpEmiPlans,
+		Source:      source,
+		ReturnURL:   input.ReturnURL,
 	}
 
-	// Marshal to JSON
-	jsonBody, err := json.Marshal(lpReq)
+	jsonBody, err := json.Marshal(lpReqBody)
 	if err != nil {
 		return nil, sharedErrors.New(sharedErrors.CodeInternalError, 500, "failed to marshal request: "+err.Error())
 	}

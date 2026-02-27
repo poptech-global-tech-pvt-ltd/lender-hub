@@ -3,10 +3,9 @@ package stub
 import (
 	"context"
 	"fmt"
-	"time"
-
 	res "lending-hub-service/internal/domain/order/dto/response"
 	"lending-hub-service/internal/domain/order/port"
+	"time"
 )
 
 // StubOrderGateway implements port.OrderGateway for local development
