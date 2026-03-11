@@ -1,0 +1,10 @@
+-- Add columns for Customer Status + Eligibility API persistence
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS pre_approved BOOLEAN;
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS onboarding_required BOOLEAN;
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS customer_info_required BOOLEAN;
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS ntb_eligible BOOLEAN;
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS txn_eligible BOOLEAN;
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS existing_user BOOLEAN;
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS eligibility_resp_id TEXT;
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS last_eligibility_at TIMESTAMPTZ;
+ALTER TABLE lender_user ADD COLUMN IF NOT EXISTS last_status_check_at TIMESTAMPTZ;
